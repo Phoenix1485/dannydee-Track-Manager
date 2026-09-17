@@ -1,0 +1,141 @@
+name: Build and publish app update
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.3"
+          host: windows
+          target: desktop
+          arch: win64_mingw
+          modules: qtmultimedia qtsvg
+          tools: tools_mingw1310,qt.tools.win64_mingw1310
+          cache: true
+
+      - name: Install Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Install packaging tools
+        shell: pwsh
+        run: |
+          choco install innosetup ffmpeg --yes --no-progress
+          New-Item -ItemType Directory -Force -Path .build-tools | Out-Null
+          Invoke-WebRequest `
+            -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" `
+            -OutFile ".build-tools\yt-dlp.exe"
+
+          $headers = @{ "User-Agent" = "DannyDee-GitHub-Actions"; "Authorization" = "Bearer $env:GITHUB_TOKEN" }
+          $release = Invoke-RestMethod -Headers $headers `
+            -Uri "https://api.github.com/repos/spotDL/spotify-downloader/releases/latest"
+          $asset = $release.assets | Where-Object { $_.name -match 'win32\.exe$' } | Select-Object -First 1
+          if (-not $asset) { throw "No current spotDL Windows executable was found." }
+          Invoke-WebRequest -Headers $headers -Uri $asset.browser_download_url -OutFile ".build-tools\spotdl.exe"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build installer with its update URL
+        shell: pwsh
+        run: |
+          $owner = $env:GITHUB_REPOSITORY_OWNER.ToLowerInvariant()
+          $repository = ($env:GITHUB_REPOSITORY -split '/')[1]
+          if ($repository.ToLowerInvariant() -eq "$owner.github.io") {
+            $pagesBase = "https://$owner.github.io"
+          } else {
+            $pagesBase = "https://$owner.github.io/$repository"
+          }
+
+          $ffmpeg = Get-ChildItem -Path "C:\tools", "C:\ProgramData\chocolatey\lib" `
+            -Filter "ffmpeg.exe" -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notlike "*\chocolatey\bin\*" } |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $ffmpeg) { throw "The installed FFmpeg executable was not found." }
+
+          $deno = (Get-Command deno.exe -ErrorAction Stop).Source
+          .\scripts\build-installer.ps1 `
+            -QtRoot $env:QT_ROOT_DIR `
+            -FfmpegPath $ffmpeg.FullName `
+            -YtDlpPath ".build-tools\yt-dlp.exe" `
+            -SpotDlPath ".build-tools\spotdl.exe" `
+            -DenoPath $deno `
+            -UpdateManifestUrl "$pagesBase/updates.json" `
+            -Clean
+
+      - name: Generate GitHub Pages update site
+        shell: pwsh
+        run: |
+          $owner = $env:GITHUB_REPOSITORY_OWNER.ToLowerInvariant()
+          $repository = ($env:GITHUB_REPOSITORY -split '/')[1]
+          if ($repository.ToLowerInvariant() -eq "$owner.github.io") {
+            $pagesBase = "https://$owner.github.io"
+          } else {
+            $pagesBase = "https://$owner.github.io/$repository"
+          }
+          $project = Select-String -LiteralPath "CMakeLists.txt" `
+            -Pattern '^project\(DannyDeeTrackManager VERSION ([0-9]+\.[0-9]+\.[0-9]+)' | Select-Object -First 1
+          if (-not $project) { throw "Project version not found." }
+          $version = $project.Matches[0].Groups[1].Value
+          $installer = Get-Item -LiteralPath "dist\DannyDee-Track-Manager-$version-Windows-x64-Setup.exe"
+          $shortSha = $env:GITHUB_SHA.Substring(0, 7)
+          .\scripts\New-UpdateSite.ps1 `
+            -InstallerPath $installer.FullName `
+            -OutputDirectory "update-site" `
+            -BaseUrl $pagesBase `
+            -Version $version `
+            -Notes "Automatischer Build aus Commit $shortSha."
+
+      - name: Upload generated site
+        uses: actions/upload-artifact@v4
+        with:
+          name: update-site
+          path: update-site
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 2
+
+  deploy-pages:
+    needs: build-windows
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Download generated site
+        uses: actions/download-artifact@v4
+        with:
+          name: update-site
+          path: update-site
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Package Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: update-site
+
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

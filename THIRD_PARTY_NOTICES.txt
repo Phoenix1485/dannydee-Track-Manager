@@ -1,0 +1,38 @@
+DannyDee Track Manager – Hinweise zu Drittsoftware
+==================================================
+
+Qt
+--
+Dieses Programm verwendet Qt 6. Die mit dem Installer ausgelieferten Qt-Bibliotheken stehen
+unter den jeweils anwendbaren Qt-Lizenzbedingungen, typischerweise LGPLv3/GPLv3. Lizenztexte,
+Quellcode-Hinweise und Pflichten: https://www.qt.io/licensing/open-source-lgpl-obligations
+
+FFmpeg (optional eingebettet)
+----------------------------
+Die Installer-Pipeline kann separate FFmpeg- und FFprobe-Programmdateien einbetten. FFmpeg ist
+ein eigenständiges Programm und steht abhängig vom verwendeten Build unter LGPL oder GPL.
+Projekt, Lizenz und Quellcode: https://ffmpeg.org/
+
+yt-dlp (optional eingebettet)
+----------------------------
+yt-dlp ist ein eigenständiges Kommandozeilenprogramm. Der Quellcode des Projekts steht unter
+der Unlicense. Die offiziellen eigenständigen Windows-Programmdateien enthalten zusätzliche
+Komponenten und werden als kombiniertes Werk unter GPLv3+ bereitgestellt. Die konkreten
+Drittanbieter-Lizenzen hängen von der verwendeten Binärversion ab.
+Projekt, Lizenz, Drittanbieterhinweise und Quellcode: https://github.com/yt-dlp/yt-dlp
+
+spotDL (optional eingebettet)
+---------------------------
+spotDL ist ein eigenständiges Kommandozeilenprogramm und steht unter der MIT-Lizenz. Es verwendet
+Spotify-Metadaten, sucht die Audiodatei aber bei anderen konfigurierten Audioanbietern.
+Projekt, Lizenz und Quellcode: https://github.com/spotDL/spotify-downloader
+
+Deno (optional eingebettet)
+--------------------------
+Deno ist eine eigenständige JavaScript-Laufzeit und steht unter der MIT-Lizenz.
+Projekt, Lizenz und Quellcode: https://github.com/denoland/deno
+
+SQLite
+------
+Qt verwendet für die lokale Datenbank SQLite. SQLite ist gemeinfrei (Public Domain):
+https://www.sqlite.org/copyright.html

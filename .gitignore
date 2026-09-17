@@ -1,0 +1,13 @@
+/build/
+/dist/
+/.build-tools/
+/update-site/
+/aqtinstall.log
+/.qt/
+*.user
+*.sqlite
+*.db
+*.flac
+*.wav
+*.aiff
+*.mp3
