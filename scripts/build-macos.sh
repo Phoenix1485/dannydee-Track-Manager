@@ -61,6 +61,15 @@ fi
 
 "$QT_ROOT/bin/macdeployqt" "$APP_PATH" -always-overwrite
 
+# The application uses SQLite only. Other Qt SQL drivers may reference database
+# client libraries that are not redistributable and are unnecessary here.
+for sql_plugins in "$APP_PATH/Contents/PlugIns/sqldrivers" \
+                   "$APP_PATH/Contents/plugins/sqldrivers"; do
+    if [[ -d "$sql_plugins" ]]; then
+        find "$sql_plugins" -type f ! -name 'libqsqlite.dylib' -delete
+    fi
+done
+
 RESOURCES_DIR="$APP_PATH/Contents/Resources"
 TOOLS_DIR="$RESOURCES_DIR/tools"
 DEPENDENCY_DIR="$APP_PATH/Contents/Frameworks/ffmpeg"
@@ -89,7 +98,7 @@ copy_dependency() {
     fi
     cp -L "$source" "$destination"
     chmod u+w "$destination"
-    lipo -verify_arch "$PLATFORM_ARCH" "$destination"
+    lipo "$destination" -verify_arch "$PLATFORM_ARCH"
     install_name_tool -id "@loader_path/$base" "$destination" 2>/dev/null || true
     while IFS= read -r dependency; do
         [[ -z "$dependency" ]] && continue
@@ -111,7 +120,7 @@ bundle_tool() {
         echo "Bundled tool is not a Mach-O executable: $source" >&2
         exit 1
     fi
-    lipo -verify_arch "$PLATFORM_ARCH" "$destination"
+    lipo "$destination" -verify_arch "$PLATFORM_ARCH"
     while IFS= read -r dependency; do
         [[ -z "$dependency" ]] && continue
         is_system_dependency "$dependency" && continue
@@ -156,7 +165,7 @@ codesign --force --deep --sign - "$APP_PATH"
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
 MAIN_EXECUTABLE="$APP_PATH/Contents/MacOS/DannyDeeTrackManager"
-lipo -verify_arch "$PLATFORM_ARCH" "$MAIN_EXECUTABLE"
+lipo "$MAIN_EXECUTABLE" -verify_arch "$PLATFORM_ARCH"
 
 BAD_DEPENDENCIES=""
 while IFS= read -r executable; do
