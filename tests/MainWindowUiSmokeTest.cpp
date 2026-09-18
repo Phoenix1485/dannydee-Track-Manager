@@ -1,12 +1,14 @@
 #include "MainWindow.h"
 
 #include <QApplication>
+#include <QAbstractItemView>
 #include <QFrame>
 #include <QLabel>
 #include <QListWidget>
 #include <QPixmap>
 #include <QPushButton>
 #include <QStandardPaths>
+#include <QTableView>
 #include <QThread>
 #include <QDebug>
 
@@ -27,8 +29,11 @@ int main(int argc, char **argv)
 
     QListWidget *playlists = window.findChild<QListWidget *>(QStringLiteral("playlistList"));
     QLabel *activePlaylist = window.findChild<QLabel *>(QStringLiteral("activePlaylistTitle"));
-    const auto deckCards = window.findChildren<QFrame *>(QStringLiteral("deckCard"));
-    const auto syncButtons = window.findChildren<QPushButton *>(QStringLiteral("deckSyncButton"));
+    QFrame *analysisCard = window.findChild<QFrame *>(QStringLiteral("analysisCard"));
+    QPushButton *analyzeSelected = window.findChild<QPushButton *>(
+        QStringLiteral("analyzeSelectedButton"));
+    QPushButton *analyzeAll = window.findChild<QPushButton *>(QStringLiteral("analyzeAllButton"));
+    QTableView *trackTable = window.findChild<QTableView *>(QStringLiteral("trackTable"));
     if (!playlists || playlists->count() < 1 || !playlists->currentItem()) {
         qCritical() << "Persistent playlist navigation was not initialized";
         return 1;
@@ -37,15 +42,20 @@ int main(int argc, char **argv)
         qCritical() << "Active playlist context is not visible";
         return 2;
     }
-    if (deckCards.size() != 2 || syncButtons.size() != 2) {
-        qCritical() << "Expected two complete performance decks" << deckCards.size()
-                    << syncButtons.size();
+    if (!analysisCard || !analyzeSelected || !analyzeAll
+        || !window.findChildren<QFrame *>(QStringLiteral("deckCard")).isEmpty()) {
+        qCritical() << "Track analysis panel did not replace the performance decks";
         return 3;
+    }
+    if (!trackTable || trackTable->selectionMode() != QAbstractItemView::ExtendedSelection
+        || trackTable->contextMenuPolicy() != Qt::CustomContextMenu) {
+        qCritical() << "Track table does not expose multi-selection and its context menu";
+        return 4;
     }
     const QPixmap snapshot = window.grab();
     if (snapshot.isNull() || snapshot.width() < 900 || snapshot.height() < 620) {
         qCritical() << "Main window could not be rendered at the supported desktop size";
-        return 4;
+        return 5;
     }
     snapshot.save(QCoreApplication::applicationDirPath() + QStringLiteral("/dannydee-ui-smoke.png"));
     return 0;

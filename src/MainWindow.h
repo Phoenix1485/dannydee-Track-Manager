@@ -5,8 +5,6 @@
 #include <QStringList>
 #include <QUrl>
 
-#include <array>
-
 #include "AudioConverter.h"
 #include "BeatAnalyzer.h"
 #include "Database.h"
@@ -28,9 +26,7 @@ class QDropEvent;
 class QFrame;
 class QPushButton;
 class QListWidget;
-class QSlider;
-class QTimer;
-class BeatGridWidget;
+class QPoint;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -52,30 +48,7 @@ private:
         QString provider;
     };
 
-    struct DeckState {
-        QMediaPlayer *player = nullptr;
-        QAudioOutput *output = nullptr;
-        BeatGridWidget *grid = nullptr;
-        QLabel *titleLabel = nullptr;
-        QLabel *bpmLabel = nullptr;
-        QLabel *stateLabel = nullptr;
-        QLabel *timeLabel = nullptr;
-        QPushButton *playButton = nullptr;
-        QPushButton *syncButton = nullptr;
-        QSlider *positionSlider = nullptr;
-        int trackId = -1;
-        QString filePath;
-        double bpm = 0.0;
-        double firstBeatMs = 0.0;
-        double confidence = 0.0;
-        double nominalSyncRate = 1.0;
-        bool beatgridAnalyzed = false;
-        bool syncEnabled = false;
-        bool sliderPressed = false;
-    };
-
     void buildUi();
-    QWidget *createDeckPanel(int deckIndex);
     void applyPlatformStyle();
     void updateLibrarySummary();
     void importFilePaths(const QStringList &paths);
@@ -98,12 +71,14 @@ private:
     void moveSelectedToPlaylist();
     void showPlaylist();
     void playSelected();
-    void loadSelectedIntoDeck(int deckIndex);
-    void toggleDeckPlayback(int deckIndex);
-    void syncDeck(int deckIndex);
-    void updateDeckDisplays();
-    void applySyncCorrection(int deckIndex);
+    void analyzeSelectedTracks();
+    void analyzeAllLocalTracks();
+    int enqueueTrackAnalysis(const QList<int> &trackIds);
+    void updateAnalysisSummary();
+    void showTrackContextMenu(const QPoint &position);
+    void renameSelectedTrack();
     void removeSelected();
+    void removeAllVisible();
     void checkForUpdates(bool manual);
     void downloadAvailableUpdate();
     void openDownloadedUpdate(const QString &path);
@@ -147,6 +122,7 @@ private:
     QLabel *m_libraryCaption = nullptr;
     QLabel *m_activePlaylistTitle = nullptr;
     QLabel *m_activePlaylistContext = nullptr;
+    QLabel *m_analysisStatus = nullptr;
     QListWidget *m_playlistList = nullptr;
     QFrame *m_updateBanner = nullptr;
     QLabel *m_updateLabel = nullptr;
@@ -154,8 +130,9 @@ private:
     QProgressBar *m_progress = nullptr;
     QMediaPlayer *m_player = nullptr;
     QAudioOutput *m_audioOutput = nullptr;
-    std::array<DeckState, 2> m_decks;
-    QTimer *m_deckTimer = nullptr;
+    int m_analysisTotal = 0;
+    int m_analysisCompleted = 0;
+    int m_analysisFailed = 0;
     int m_playlistFilterId = -1;
     int m_lastImportedPlaylistId = -1;
     bool m_manualUpdateCheck = false;

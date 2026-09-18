@@ -7,6 +7,8 @@
 #include <QStringList>
 #include <QVariant>
 
+#include <algorithm>
+
 Database::Database()
     : m_db(QSqlDatabase::addDatabase("QSQLITE"))
 {
@@ -168,8 +170,35 @@ bool Database::addToPlaylist(int playlistId, int trackId)
     q.addBindValue(playlistId);
     q.addBindValue(trackId);
     q.addBindValue(playlistId);
-    if (!q.exec()) m_lastError = q.lastError().text();
-    return q.isActive();
+    if (!q.exec()) {
+        m_lastError = q.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool Database::addTracksToPlaylist(int playlistId, const QList<int> &trackIds)
+{
+    if (playlistId < 0 || trackIds.isEmpty()) {
+        m_lastError = QStringLiteral("Ungültige Playlist oder leere Track-Auswahl.");
+        return false;
+    }
+    if (!m_db.transaction()) {
+        m_lastError = m_db.lastError().text();
+        return false;
+    }
+    for (const int trackId : trackIds) {
+        if (!addToPlaylist(playlistId, trackId)) {
+            m_db.rollback();
+            return false;
+        }
+    }
+    if (!m_db.commit()) {
+        m_lastError = m_db.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+    return true;
 }
 
 bool Database::removeFromPlaylist(int playlistId, int trackId)
@@ -178,18 +207,39 @@ bool Database::removeFromPlaylist(int playlistId, int trackId)
     q.prepare("DELETE FROM playlist_tracks WHERE playlist_id=? AND track_id=?");
     q.addBindValue(playlistId);
     q.addBindValue(trackId);
-    if (!q.exec()) m_lastError = q.lastError().text();
-    return q.isActive();
+    if (!q.exec()) {
+        m_lastError = q.lastError().text();
+        return false;
+    }
+    return true;
 }
 
 bool Database::moveTracksBetweenPlaylists(int sourcePlaylistId, int targetPlaylistId,
                                           const QList<int> &trackIds)
 {
-    if (sourcePlaylistId < 0 || targetPlaylistId < 0 || sourcePlaylistId == targetPlaylistId)
+    if (sourcePlaylistId < 0 || targetPlaylistId < 0 || sourcePlaylistId == targetPlaylistId) {
+        m_lastError = QStringLiteral("Quell- und Ziel-Playlist müssen verschieden und gültig sein.");
         return false;
+    }
+    if (trackIds.isEmpty()) {
+        m_lastError = QStringLiteral("Es wurden keine Tracks zum Verschieben ausgewählt.");
+        return false;
+    }
     if (!m_db.transaction()) {
         m_lastError = m_db.lastError().text();
         return false;
+    }
+    QSqlQuery membership(m_db);
+    membership.prepare("SELECT COUNT(*) FROM playlist_tracks WHERE playlist_id=? AND track_id=?");
+    for (const int trackId : trackIds) {
+        membership.bindValue(0, sourcePlaylistId);
+        membership.bindValue(1, trackId);
+        if (!membership.exec() || !membership.next() || membership.value(0).toInt() != 1) {
+            m_lastError = QStringLiteral("Mindestens ein ausgewählter Track ist nicht mehr in der Quell-Playlist.");
+            m_db.rollback();
+            return false;
+        }
+        membership.finish();
     }
     for (const int trackId : trackIds) {
         if (!addToPlaylist(targetPlaylistId, trackId) ||
@@ -200,6 +250,54 @@ bool Database::moveTracksBetweenPlaylists(int sourcePlaylistId, int targetPlayli
     }
     if (!m_db.commit()) {
         m_lastError = m_db.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+    return true;
+}
+
+bool Database::renameTrack(int trackId, const QString &title)
+{
+    const QString cleanTitle = title.trimmed();
+    if (trackId < 0 || cleanTitle.isEmpty()) {
+        m_lastError = QStringLiteral("Track und neuer Titel müssen gültig sein.");
+        return false;
+    }
+    QSqlQuery query(m_db);
+    query.prepare("UPDATE tracks SET title=? WHERE id=?");
+    query.addBindValue(cleanTitle);
+    query.addBindValue(trackId);
+    if (!query.exec()) {
+        m_lastError = query.lastError().text();
+        return false;
+    }
+    return query.numRowsAffected() == 1;
+}
+
+bool Database::deleteTracks(const QList<int> &trackIds)
+{
+    if (trackIds.isEmpty()) {
+        m_lastError = QStringLiteral("Es wurden keine Tracks zum Entfernen ausgewählt.");
+        return false;
+    }
+    if (!m_db.transaction()) {
+        m_lastError = m_db.lastError().text();
+        return false;
+    }
+    QSqlQuery query(m_db);
+    query.prepare("DELETE FROM tracks WHERE id=?");
+    for (const int trackId : trackIds) {
+        query.bindValue(0, trackId);
+        if (!query.exec()) {
+            m_lastError = query.lastError().text();
+            m_db.rollback();
+            return false;
+        }
+        query.finish();
+    }
+    if (!m_db.commit()) {
+        m_lastError = m_db.lastError().text();
+        m_db.rollback();
         return false;
     }
     return true;
@@ -212,6 +310,29 @@ bool Database::updateBeatAnalysis(int trackId, double bpm, double firstBeatMs,
     query.prepare("UPDATE tracks SET bpm=?,beatgrid_offset_ms=?,beatgrid_confidence=?,"
                   "beatgrid_analyzed=1 WHERE id=?");
     query.addBindValue(bpm);
+    query.addBindValue(firstBeatMs);
+    query.addBindValue(confidence);
+    query.addBindValue(trackId);
+    if (!query.exec()) {
+        m_lastError = query.lastError().text();
+        return false;
+    }
+    return query.numRowsAffected() == 1;
+}
+
+bool Database::updateTrackAnalysis(int trackId, double bpm, const QString &musicalKey,
+                                   int energy, const QString &label, double firstBeatMs,
+                                   double confidence)
+{
+    QSqlQuery query(m_db);
+    query.prepare("UPDATE tracks SET bpm=?,"
+                  "musical_key=COALESCE(NULLIF(?,''),musical_key),"
+                  "energy=?,label=COALESCE(NULLIF(?,''),label),"
+                  "beatgrid_offset_ms=?,beatgrid_confidence=?,beatgrid_analyzed=1 WHERE id=?");
+    query.addBindValue(bpm);
+    query.addBindValue(musicalKey.trimmed());
+    query.addBindValue(std::clamp(energy, 1, 10));
+    query.addBindValue(label.trimmed());
     query.addBindValue(firstBeatMs);
     query.addBindValue(confidence);
     query.addBindValue(trackId);

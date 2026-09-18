@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(DannyDeeTrackManager VERSION 0.10.0 LANGUAGES CXX)
+project(DannyDeeTrackManager VERSION 0.11.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -24,8 +24,6 @@ qt_add_executable(DannyDeeTrackManager WIN32 MACOSX_BUNDLE
     src/UpdateManager.cpp src/UpdateManager.h
     src/PlaylistImporter.cpp src/PlaylistImporter.h
     src/BeatAnalyzer.cpp src/BeatAnalyzer.h
-    src/BeatGridWidget.cpp src/BeatGridWidget.h
-    src/BeatSyncMath.cpp src/BeatSyncMath.h
     resources/resources.qrc
 )
 
@@ -98,6 +96,7 @@ if(BUILD_TESTING)
     qt_add_executable(DannyDeeBeatAnalyzerTest
         tests/BeatAnalyzerTest.cpp
         src/BeatAnalyzer.cpp src/BeatAnalyzer.h
+        src/AudioProbe.cpp src/AudioProbe.h
         src/ToolLocator.cpp src/ToolLocator.h
     )
     set_target_properties(DannyDeeBeatAnalyzerTest PROPERTIES WIN32_EXECUTABLE FALSE)
@@ -126,8 +125,6 @@ if(BUILD_TESTING)
         src/UpdateManager.cpp src/UpdateManager.h
         src/PlaylistImporter.cpp src/PlaylistImporter.h
         src/BeatAnalyzer.cpp src/BeatAnalyzer.h
-        src/BeatGridWidget.cpp src/BeatGridWidget.h
-        src/BeatSyncMath.cpp src/BeatSyncMath.h
     )
     set_target_properties(DannyDeeMainWindowUiSmokeTest PROPERTIES WIN32_EXECUTABLE FALSE)
     target_include_directories(DannyDeeMainWindowUiSmokeTest PRIVATE

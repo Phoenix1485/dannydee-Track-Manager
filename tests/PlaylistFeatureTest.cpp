@@ -67,15 +67,19 @@ int main(int argc, char **argv)
     const int secondTrack = database.addTrackReturningId(
         "Second", "Artist B", "Other", 0, {}, 5, {}, {},
         "https://open.spotify.com/track/two", {}, false);
+    const int thirdTrack = database.addTrackReturningId(
+        "Third", "Artist C", "Techno", 0, {}, 5, {}, {},
+        "https://example.test/track/three", {}, false);
     const int sourcePlaylist = database.ensurePlaylist(
         "Imported", "https://open.spotify.com/playlist/list", "Spotify");
     const int targetPlaylist = database.ensurePlaylist("Target");
-    if (!require(firstTrack > 0 && secondTrack > 0 && sourcePlaylist > 0 && targetPlaylist > 0,
+    if (!require(firstTrack > 0 && secondTrack > 0 && thirdTrack > 0
+                     && sourcePlaylist > 0 && targetPlaylist > 0,
                  "Database fixtures could not be created") ||
-        !require(database.updateBeatAnalysis(firstTrack, 124.5, 182.0, 0.91),
-                 "Beat analysis could not be stored") ||
-        !require(database.addToPlaylist(sourcePlaylist, firstTrack)
-                     && database.addToPlaylist(sourcePlaylist, secondTrack),
+        !require(database.updateTrackAnalysis(firstTrack, 124.5, "Am", 8, "Label Test",
+                                              182.0, 0.91),
+                 "Track analysis could not be stored") ||
+        !require(database.addTracksToPlaylist(sourcePlaylist, {firstTrack, secondTrack}),
                  "Tracks could not be copied into playlist") ||
         !require(database.moveTracksBetweenPlaylists(sourcePlaylist, targetPlaylist,
                                                      {firstTrack, secondTrack}),
@@ -92,15 +96,55 @@ int main(int argc, char **argv)
     if (!require(count.exec() && count.next() && count.value(0).toInt() == 2,
                  "Target playlist does not contain moved tracks")) return 1;
     count.finish();
-    count.prepare("SELECT bpm,beatgrid_offset_ms,beatgrid_confidence,beatgrid_analyzed "
+    count.prepare("SELECT bpm,musical_key,energy,label,beatgrid_offset_ms,"
+                  "beatgrid_confidence,beatgrid_analyzed "
                   "FROM tracks WHERE id=?");
     count.addBindValue(firstTrack);
     if (!require(count.exec() && count.next()
                      && qAbs(count.value(0).toDouble() - 124.5) < 0.001
-                     && qAbs(count.value(1).toDouble() - 182.0) < 0.001
-                     && qAbs(count.value(2).toDouble() - 0.91) < 0.001
-                     && count.value(3).toBool(),
-                 "Stored beatgrid data is incorrect")) return 1;
+                     && count.value(1).toString() == QStringLiteral("Am")
+                     && count.value(2).toInt() == 8
+                     && count.value(3).toString() == QStringLiteral("Label Test")
+                     && qAbs(count.value(4).toDouble() - 182.0) < 0.001
+                     && qAbs(count.value(5).toDouble() - 0.91) < 0.001
+                     && count.value(6).toBool(),
+                 "Stored track analysis data is incorrect")) return 1;
+
+    if (!require(database.addToPlaylist(sourcePlaylist, thirdTrack),
+                 "Rollback fixture could not be added")
+        || !require(!database.moveTracksBetweenPlaylists(
+                         sourcePlaylist, targetPlaylist, {thirdTrack, firstTrack}),
+                    "Move with incomplete source membership unexpectedly succeeded")) return 1;
+    count.finish();
+    count.prepare("SELECT COUNT(*) FROM playlist_tracks WHERE playlist_id=? AND track_id=?");
+    count.addBindValue(sourcePlaylist);
+    count.addBindValue(thirdTrack);
+    if (!require(count.exec() && count.next() && count.value(0).toInt() == 1,
+                 "Failed move did not preserve the source membership")) return 1;
+    count.finish();
+    count.prepare("SELECT COUNT(*) FROM playlist_tracks WHERE playlist_id=? AND track_id=?");
+    count.addBindValue(targetPlaylist);
+    count.addBindValue(thirdTrack);
+    if (!require(count.exec() && count.next() && count.value(0).toInt() == 0,
+                 "Failed move partially modified the target playlist")) return 1;
+
+    if (!require(database.renameTrack(thirdTrack, "Renamed Third"),
+                 "Track rename failed")) return 1;
+    count.finish();
+    count.prepare("SELECT title FROM tracks WHERE id=?");
+    count.addBindValue(thirdTrack);
+    if (!require(count.exec() && count.next()
+                     && count.value(0).toString() == QStringLiteral("Renamed Third"),
+                 "Renamed title was not stored")) return 1;
+
+    if (!require(database.deleteTracks({secondTrack, thirdTrack}),
+                 "Multi-track delete failed")) return 1;
+    count.finish();
+    count.prepare("SELECT COUNT(*) FROM tracks WHERE id IN (?,?)");
+    count.addBindValue(secondTrack);
+    count.addBindValue(thirdTrack);
+    if (!require(count.exec() && count.next() && count.value(0).toInt() == 0,
+                 "Multi-track delete left database rows behind")) return 1;
 
     return 0;
 }

@@ -40,10 +40,12 @@ bool verifyTempo(double expectedBpm, double offsetSeconds)
     const double period = 60000.0 / expectedBpm;
     const double phaseError = circularDistance(result.firstBeatMs, offsetSeconds * 1000.0, period);
     if (!result.isValid() || std::abs(result.bpm - expectedBpm) > 1.5
-        || phaseError > 55.0 || result.confidence < 0.15 || result.trackId != 42) {
+        || phaseError > 55.0 || result.confidence < 0.15 || result.trackId != 42
+        || result.energy < 1 || result.energy > 10 || result.musicalKey.isEmpty()) {
         qCritical() << "Unexpected beat analysis" << "expected" << expectedBpm
                     << "actual" << result.bpm << "offset" << result.firstBeatMs
-                    << "phase error" << phaseError << "confidence" << result.confidence;
+                    << "phase error" << phaseError << "confidence" << result.confidence
+                    << "key" << result.musicalKey << "energy" << result.energy;
         return false;
     }
     return true;
@@ -57,8 +59,10 @@ int main(int argc, char **argv)
     if (!verifyTempo(100.0, 0.17)) return 2;
 
     const QByteArray silence(11025 * 8 * static_cast<int>(sizeof(float)), '\0');
-    if (BeatAnalyzer::analyzePcm(silence).isValid()) {
-        qCritical() << "Silence must not produce a valid beatgrid";
+    const BeatAnalysisResult silentResult = BeatAnalyzer::analyzePcm(silence);
+    if (silentResult.isValid() || silentResult.energy != 0
+        || !silentResult.musicalKey.isEmpty()) {
+        qCritical() << "Silence must not produce analysis values";
         return 3;
     }
     return 0;

@@ -14,6 +14,9 @@ struct BeatAnalysisResult {
     double bpm = 0.0;
     double firstBeatMs = 0.0;
     double confidence = 0.0;
+    QString musicalKey;
+    QString label;
+    int energy = 0;
     qint64 durationMs = 0;
 
     bool isValid() const { return bpm >= 50.0 && confidence > 0.0; }
@@ -25,7 +28,7 @@ class BeatAnalyzer : public QObject {
 public:
     explicit BeatAnalyzer(QObject *parent = nullptr);
 
-    void enqueue(int trackId, const QString &filePath);
+    bool enqueue(int trackId, const QString &filePath);
     bool isBusy() const;
 
     static BeatAnalysisResult analyzePcm(const QByteArray &pcm, int sampleRate = 11025,

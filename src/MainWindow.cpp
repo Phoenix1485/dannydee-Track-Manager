@@ -1,7 +1,5 @@
 #include "MainWindow.h"
 #include "AudioProbe.h"
-#include "BeatGridWidget.h"
-#include "BeatSyncMath.h"
 #include "LinkResolver.h"
 
 #include <QAction>
@@ -27,6 +25,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMediaPlayer>
@@ -38,7 +37,6 @@
 #include <QRegularExpression>
 #include <QSet>
 #include <QSignalBlocker>
-#include <QSlider>
 #include <QSqlQuery>
 #include <QSqlError>
 #include <QSqlTableModel>
@@ -54,18 +52,6 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
-#include <cmath>
-
-namespace {
-QString deckTime(qint64 milliseconds)
-{
-    const qint64 totalSeconds = std::max<qint64>(0, milliseconds) / 1000;
-    return QStringLiteral("%1:%2")
-        .arg(totalSeconds / 60)
-        .arg(totalSeconds % 60, 2, 10, QLatin1Char('0'));
-}
-
-}
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), m_converter(this), m_downloader(this), m_updater(this),
@@ -85,10 +71,6 @@ MainWindow::MainWindow(QWidget *parent)
     m_audioOutput->setVolume(0.75f);
     m_player = new QMediaPlayer(this);
     m_player->setAudioOutput(m_audioOutput);
-    m_deckTimer = new QTimer(this);
-    m_deckTimer->setInterval(100);
-    connect(m_deckTimer, &QTimer::timeout, this, &MainWindow::updateDeckDisplays);
-    m_deckTimer->start();
     connect(&m_converter, &AudioConverter::finished, this, [this](bool ok, const QString &msg) {
         setActivity(msg);
         if (!ok) QMessageBox::warning(this, "Konvertierung", msg);
@@ -112,6 +94,7 @@ MainWindow::MainWindow(QWidget *parent)
         update.addBindValue(track.artist);
         update.addBindValue(m_downloadTrackId);
         update.exec();
+        enqueueTrackAnalysis({m_downloadTrackId});
         m_model->select();
         updateLibrarySummary();
         setActivity("Download abgeschlossen: " + path);
@@ -213,43 +196,37 @@ MainWindow::MainWindow(QWidget *parent)
         QTimer::singleShot(0, this, &MainWindow::startNextLinkImport);
     });
     connect(&m_beatAnalyzer, &BeatAnalyzer::analysisStarted, this,
-            [this](int trackId, const QString &) {
-        for (DeckState &deck : m_decks) {
-            if (deck.trackId == trackId && deck.stateLabel)
-                deck.stateLabel->setText(QStringLiteral("BPM & Beatgrid werden analysiert …"));
+            [this](int, const QString &filePath) {
+        if (m_analysisStatus) {
+            m_analysisStatus->setText(QStringLiteral("Analysiere: %1")
+                                          .arg(QFileInfo(filePath).fileName()));
         }
-        setActivity(QStringLiteral("Automatische BPM- und Beatgrid-Analyse läuft …"), -1);
+        setActivity(QStringLiteral("BPM, Key, Energy und Label werden analysiert …"), -1);
     });
     connect(&m_beatAnalyzer, &BeatAnalyzer::analyzed, this,
             [this](const BeatAnalysisResult &result) {
-        if (!m_database.updateBeatAnalysis(result.trackId, result.bpm,
-                                           result.firstBeatMs, result.confidence)) {
-            QMessageBox::warning(this, QStringLiteral("Beat-Analyse"), m_database.lastError());
+        if (!m_database.updateTrackAnalysis(result.trackId, result.bpm, result.musicalKey,
+                                            result.energy, result.label, result.firstBeatMs,
+                                            result.confidence)) {
+            ++m_analysisFailed;
+            updateAnalysisSummary();
+            QMessageBox::warning(this, QStringLiteral("Track-Analyse"), m_database.lastError());
             return;
         }
-        for (DeckState &deck : m_decks) {
-            if (deck.trackId != result.trackId) continue;
-            deck.bpm = result.bpm;
-            deck.firstBeatMs = result.firstBeatMs;
-            deck.confidence = result.confidence;
-            deck.beatgridAnalyzed = true;
-            deck.grid->setGrid(deck.bpm, deck.firstBeatMs, deck.confidence);
-            deck.stateLabel->setText(QStringLiteral("Beatgrid bereit · %1% Sicherheit")
-                                         .arg(qRound(deck.confidence * 100.0)));
-        }
+        ++m_analysisCompleted;
         m_model->select();
         refreshFilter();
-        updateDeckDisplays();
-        setActivity(QStringLiteral("BPM %1 und Beatgrid gespeichert.").arg(result.bpm, 0, 'f', 2));
+        updateAnalysisSummary();
+        setActivity(QStringLiteral("Analyse gespeichert: %1 BPM, Key %2, Energy %3/10.")
+                        .arg(result.bpm, 0, 'f', 2)
+                        .arg(result.musicalKey.isEmpty() ? QStringLiteral("–") : result.musicalKey)
+                        .arg(result.energy));
     });
     connect(&m_beatAnalyzer, &BeatAnalyzer::failed, this,
-            [this](int trackId, const QString &, const QString &message) {
-        for (DeckState &deck : m_decks) {
-            if (deck.trackId == trackId && deck.stateLabel)
-                deck.stateLabel->setText(QStringLiteral("Analyse fehlgeschlagen"));
-        }
-        updateDeckDisplays();
-        setActivity(QStringLiteral("Beat-Analyse fehlgeschlagen: %1").arg(message));
+            [this](int, const QString &, const QString &message) {
+        ++m_analysisFailed;
+        updateAnalysisSummary();
+        setActivity(QStringLiteral("Track-Analyse fehlgeschlagen: %1").arg(message));
     });
 
     if (m_updater.isConfigured()) {
@@ -259,6 +236,7 @@ MainWindow::MainWindow(QWidget *parent)
 
 void MainWindow::storeDownloadedMedia(const QStringList &paths, int trackId, const QUrl &sourceUrl)
 {
+    QList<int> analysisIds;
     for (int index = 0; index < paths.size(); ++index) {
         const QString &path = paths.at(index);
         const ProbedTrack metadata = AudioProbe::read(path);
@@ -283,110 +261,18 @@ void MainWindow::storeDownloadedMedia(const QStringList &paths, int trackId, con
             update.addBindValue(metadata.label);
             update.addBindValue(metadata.releaseDate);
             update.addBindValue(trackId);
-            update.exec();
+            if (update.exec()) analysisIds << trackId;
         } else {
-            m_database.addTrack(title, artist,
-                                metadata.genre.isEmpty() ? "Other" : metadata.genre,
-                                metadata.bpm, metadata.musicalKey, 5, metadata.label,
-                                metadata.releaseDate, sourceUrl.toString(), path, true);
+            const int newTrackId = m_database.addTrackReturningId(
+                title, artist, metadata.genre.isEmpty() ? "Other" : metadata.genre,
+                metadata.bpm, metadata.musicalKey, 5, metadata.label,
+                metadata.releaseDate, sourceUrl.toString(), path, true);
+            if (newTrackId >= 0) analysisIds << newTrackId;
         }
     }
     m_model->select();
     updateLibrarySummary();
-}
-
-QWidget *MainWindow::createDeckPanel(int deckIndex)
-{
-    DeckState &deck = m_decks.at(static_cast<size_t>(deckIndex));
-    auto *card = new QFrame;
-    card->setObjectName("deckCard");
-    card->setProperty("deck", deckIndex == 0 ? "A" : "B");
-    auto *layout = new QVBoxLayout(card);
-    layout->setContentsMargins(14, 11, 14, 12);
-    layout->setSpacing(7);
-
-    auto *header = new QHBoxLayout;
-    auto *badge = new QLabel(deckIndex == 0 ? "DECK A" : "DECK B");
-    badge->setObjectName("deckBadge");
-    badge->setProperty("deck", deckIndex == 0 ? "A" : "B");
-    deck.stateLabel = new QLabel("Kein Track geladen");
-    deck.stateLabel->setObjectName("deckState");
-    deck.stateLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    header->addWidget(badge);
-    header->addStretch();
-    header->addWidget(deck.stateLabel);
-    layout->addLayout(header);
-
-    deck.titleLabel = new QLabel("–");
-    deck.titleLabel->setObjectName("deckTrackTitle");
-    deck.titleLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    layout->addWidget(deck.titleLabel);
-
-    deck.grid = new BeatGridWidget;
-    layout->addWidget(deck.grid);
-
-    deck.positionSlider = new QSlider(Qt::Horizontal);
-    deck.positionSlider->setObjectName("deckPosition");
-    deck.positionSlider->setRange(0, 1000);
-    deck.positionSlider->setEnabled(false);
-    layout->addWidget(deck.positionSlider);
-
-    auto *controls = new QHBoxLayout;
-    controls->setSpacing(7);
-    auto *loadButton = new QPushButton("Auswahl laden");
-    loadButton->setProperty("role", "quiet");
-    loadButton->setToolTip(QStringLiteral("Ausgewählten lokalen Track in Deck %1 laden")
-                               .arg(deckIndex == 0 ? "A" : "B"));
-    deck.playButton = new QPushButton(QStringLiteral("▶"));
-    deck.playButton->setObjectName("deckPlayButton");
-    deck.playButton->setEnabled(false);
-    deck.playButton->setToolTip("Play / Pause");
-    deck.syncButton = new QPushButton(deckIndex == 0 ? "SYNC → B" : "SYNC → A");
-    deck.syncButton->setObjectName("deckSyncButton");
-    deck.syncButton->setCheckable(true);
-    deck.syncButton->setEnabled(false);
-    deck.syncButton->setToolTip("Tempo und Beatphase mit dem anderen Deck synchronisieren");
-    deck.bpmLabel = new QLabel("— BPM");
-    deck.bpmLabel->setObjectName("deckBpm");
-    deck.timeLabel = new QLabel("0:00 / 0:00");
-    deck.timeLabel->setObjectName("deckTime");
-    controls->addWidget(loadButton);
-    controls->addWidget(deck.playButton);
-    controls->addWidget(deck.syncButton);
-    controls->addWidget(deck.bpmLabel);
-    controls->addStretch();
-    controls->addWidget(deck.timeLabel);
-    layout->addLayout(controls);
-
-    deck.output = new QAudioOutput(this);
-    deck.output->setVolume(0.75f);
-    deck.player = new QMediaPlayer(this);
-    deck.player->setAudioOutput(deck.output);
-
-    connect(loadButton, &QPushButton::clicked, this,
-            [this, deckIndex] { loadSelectedIntoDeck(deckIndex); });
-    connect(deck.playButton, &QPushButton::clicked, this,
-            [this, deckIndex] { toggleDeckPlayback(deckIndex); });
-    connect(deck.syncButton, &QPushButton::clicked, this,
-            [this, deckIndex] { syncDeck(deckIndex); });
-    connect(deck.positionSlider, &QSlider::sliderPressed, this,
-            [this, deckIndex] { m_decks.at(static_cast<size_t>(deckIndex)).sliderPressed = true; });
-    connect(deck.positionSlider, &QSlider::sliderReleased, this, [this, deckIndex] {
-        DeckState &current = m_decks.at(static_cast<size_t>(deckIndex));
-        current.sliderPressed = false;
-        if (current.player->duration() > 0) {
-            current.player->setPosition(current.player->duration()
-                                        * current.positionSlider->value() / 1000);
-        }
-    });
-    connect(deck.player, &QMediaPlayer::errorOccurred, this,
-            [this, deckIndex](QMediaPlayer::Error, const QString &message) {
-        DeckState &current = m_decks.at(static_cast<size_t>(deckIndex));
-        current.stateLabel->setText(QStringLiteral("Wiedergabefehler"));
-        setActivity(QStringLiteral("Deck %1: %2")
-                        .arg(deckIndex == 0 ? "A" : "B", message));
-    });
-    return card;
+    enqueueTrackAnalysis(analysisIds);
 }
 
 void MainWindow::buildUi()
@@ -435,15 +321,20 @@ void MainWindow::buildUi()
     auto *flacAction = libraryMenu->addAction("Lokale Datei als FLAC");
     auto *wavAction = libraryMenu->addAction("Lokale Datei als WAV");
     libraryMenu->addSeparator();
+    auto *analyzeSelectedAction = libraryMenu->addAction("Auswahl analysieren");
+    auto *analyzeAllAction = libraryMenu->addAction("Alle lokalen Tracks analysieren");
+    libraryMenu->addSeparator();
     auto *playlistAction = libraryMenu->addAction("Neue Playlist");
     auto *addPlaylistAction = libraryMenu->addAction("Auswahl in Playlist kopieren …");
     auto *movePlaylistAction = libraryMenu->addAction("Auswahl in Playlist verschieben …");
     auto *viewPlaylistAction = libraryMenu->addAction("Playlist-Navigation fokussieren");
     viewPlaylistAction->setShortcut(QKeySequence("Ctrl+P"));
     libraryMenu->addSeparator();
+    auto *renameAction = libraryMenu->addAction("Track umbenennen …");
     auto *removeAction = libraryMenu->addAction(style()->standardIcon(QStyle::SP_TrashIcon),
-                                                 "Eintrag entfernen");
+                                                 "Ausgewählte Einträge entfernen");
     removeAction->setShortcut(QKeySequence::Delete);
+    auto *removeAllAction = libraryMenu->addAction("Alle sichtbaren Einträge entfernen …");
 
     auto *playAction = playbackMenu->addAction(style()->standardIcon(QStyle::SP_MediaPlay),
                                                 "Abspielen / Pause");
@@ -477,26 +368,38 @@ void MainWindow::buildUi()
     m_updateBanner->hide();
     layout->addWidget(m_updateBanner);
 
-    auto *mixerCard = new QFrame;
-    mixerCard->setObjectName("mixerCard");
-    auto *mixerLayout = new QVBoxLayout(mixerCard);
-    mixerLayout->setContentsMargins(12, 10, 12, 12);
-    mixerLayout->setSpacing(8);
-    auto *mixerHeader = new QHBoxLayout;
-    auto *mixerTitle = new QLabel("PERFORMANCE DECKS");
-    mixerTitle->setObjectName("navigationTitle");
-    auto *mixerHint = new QLabel("Lokalen Track auswählen → in Deck laden → beide Beatgrids analysieren → Sync");
-    mixerHint->setObjectName("sectionCaption");
-    mixerHeader->addWidget(mixerTitle);
-    mixerHeader->addStretch();
-    mixerHeader->addWidget(mixerHint);
-    mixerLayout->addLayout(mixerHeader);
-    auto *decks = new QHBoxLayout;
-    decks->setSpacing(10);
-    decks->addWidget(createDeckPanel(0), 1);
-    decks->addWidget(createDeckPanel(1), 1);
-    mixerLayout->addLayout(decks);
-    layout->addWidget(mixerCard);
+    auto *analysisCard = new QFrame;
+    analysisCard->setObjectName("analysisCard");
+    auto *analysisLayout = new QVBoxLayout(analysisCard);
+    analysisLayout->setContentsMargins(16, 12, 14, 12);
+    analysisLayout->setSpacing(8);
+    auto *analysisHeading = new QHBoxLayout;
+    auto *analysisTitle = new QLabel("TRACK-ANALYSE");
+    analysisTitle->setObjectName("navigationTitle");
+    m_analysisStatus = new QLabel("Lokale Tracks auswählen oder gesamte Bibliothek analysieren.");
+    m_analysisStatus->setObjectName("analysisStatus");
+    analysisHeading->addWidget(analysisTitle);
+    analysisHeading->addStretch();
+    analysisHeading->addWidget(m_analysisStatus);
+    analysisLayout->addLayout(analysisHeading);
+    auto *analysisControls = new QHBoxLayout;
+    analysisControls->setSpacing(10);
+    for (const QString &metric : {QStringLiteral("BPM"), QStringLiteral("KEY"),
+                                  QStringLiteral("ENERGY"), QStringLiteral("LABEL-TAG")}) {
+        auto *chip = new QLabel(metric);
+        chip->setProperty("role", "analysisMetric");
+        analysisControls->addWidget(chip);
+    }
+    analysisControls->addStretch();
+    auto *analyzeSelectedButton = new QPushButton("Auswahl analysieren");
+    analyzeSelectedButton->setObjectName("analyzeSelectedButton");
+    analyzeSelectedButton->setProperty("role", "accent");
+    auto *analyzeAllButton = new QPushButton("Alle lokalen analysieren");
+    analyzeAllButton->setObjectName("analyzeAllButton");
+    analysisControls->addWidget(analyzeSelectedButton);
+    analysisControls->addWidget(analyzeAllButton);
+    analysisLayout->addLayout(analysisControls);
+    layout->addWidget(analysisCard);
 
     auto *overview = new QHBoxLayout;
     overview->setSpacing(12);
@@ -622,6 +525,7 @@ void MainWindow::buildUi()
     m_table->setModel(m_model);
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    m_table->setContextMenuPolicy(Qt::CustomContextMenu);
     m_table->setSortingEnabled(true);
     m_table->setAlternatingRowColors(true);
     m_table->setShowGrid(false);
@@ -672,12 +576,18 @@ void MainWindow::buildUi()
     connect(playAction, &QAction::triggered, this, &MainWindow::playSelected);
     connect(flacAction, &QAction::triggered, this, [this]{ convertSelected("flac"); });
     connect(wavAction, &QAction::triggered, this, [this]{ convertSelected("wav"); });
+    connect(analyzeSelectedAction, &QAction::triggered, this, &MainWindow::analyzeSelectedTracks);
+    connect(analyzeAllAction, &QAction::triggered, this, &MainWindow::analyzeAllLocalTracks);
+    connect(analyzeSelectedButton, &QPushButton::clicked, this, &MainWindow::analyzeSelectedTracks);
+    connect(analyzeAllButton, &QPushButton::clicked, this, &MainWindow::analyzeAllLocalTracks);
     connect(playlistAction, &QAction::triggered, this, &MainWindow::createPlaylist);
     connect(newPlaylistButton, &QPushButton::clicked, this, &MainWindow::createPlaylist);
     connect(addPlaylistAction, &QAction::triggered, this, &MainWindow::addSelectedToPlaylist);
     connect(movePlaylistAction, &QAction::triggered, this, &MainWindow::moveSelectedToPlaylist);
     connect(viewPlaylistAction, &QAction::triggered, this, &MainWindow::showPlaylist);
+    connect(renameAction, &QAction::triggered, this, &MainWindow::renameSelectedTrack);
     connect(removeAction, &QAction::triggered, this, &MainWindow::removeSelected);
+    connect(removeAllAction, &QAction::triggered, this, &MainWindow::removeAllVisible);
     connect(updateAction, &QAction::triggered, this, [this] { checkForUpdates(true); });
     connect(aboutAction, &QAction::triggered, this, [this] {
         QMessageBox::about(this, QStringLiteral("DannyDee Track Manager"),
@@ -691,6 +601,8 @@ void MainWindow::buildUi()
     connect(m_genre, &QComboBox::currentTextChanged, this, &MainWindow::refreshFilter);
     connect(m_bpmMin, &QDoubleSpinBox::valueChanged, this, &MainWindow::refreshFilter);
     connect(m_bpmMax, &QDoubleSpinBox::valueChanged, this, &MainWindow::refreshFilter);
+    connect(m_table, &QTableView::customContextMenuRequested,
+            this, &MainWindow::showTrackContextMenu);
     connect(m_playlistList, &QListWidget::currentItemChanged, this,
             [this](QListWidgetItem *current) {
         if (!current) return;
@@ -720,27 +632,14 @@ void MainWindow::applyPlatformStyle()
         QMainWindow, QDialog, QWidget#appRoot { background: #0B0D13; color: #F4F6FA; }
         QLabel#brandTitle { font-size: 26px; font-weight: 750; color: #FFFFFF; }
         QLabel#brandSubtitle, QLabel#statLabel, QLabel#sectionCaption, QLabel#statusLabel { color: #8B93A7; }
-        QFrame#statCard, QFrame#filterCard, QFrame#libraryCard, QFrame#mixerCard {
+        QFrame#statCard, QFrame#filterCard, QFrame#libraryCard, QFrame#analysisCard {
             background: #131722; border: 1px solid #242A38; border-radius: 12px;
         }
-        QFrame#deckCard { background: #0E121B; border: 1px solid #282F3E; border-radius: 9px; }
-        QFrame#deckCard[deck="A"] { border-top: 2px solid #8B5CF6; }
-        QFrame#deckCard[deck="B"] { border-top: 2px solid #2DD4BF; }
-        QLabel#deckBadge { font-size: 11px; font-weight: 800; padding: 3px 7px;
-            border-radius: 5px; color: #FFFFFF; }
-        QLabel#deckBadge[deck="A"] { background: #5B3DB2; }
-        QLabel#deckBadge[deck="B"] { background: #167D72; }
-        QLabel#deckTrackTitle { color: #FFFFFF; font-size: 14px; font-weight: 700; }
-        QLabel#deckState, QLabel#deckTime { color: #747E94; font-size: 10px; }
-        QLabel#deckBpm { color: #E7DCFF; font-weight: 750; min-width: 92px; }
-        QPushButton#deckPlayButton { min-width: 40px; padding: 0; font-size: 15px; }
-        QPushButton#deckSyncButton { color: #A98BFF; border-color: #51417D; font-weight: 750; }
-        QPushButton#deckSyncButton:checked { color: #07110F; background: #2DD4BF;
-            border-color: #55E6D3; }
-        QSlider#deckPosition::groove:horizontal { height: 4px; background: #252C3A; border-radius: 2px; }
-        QSlider#deckPosition::sub-page:horizontal { background: #8B5CF6; border-radius: 2px; }
-        QSlider#deckPosition::handle:horizontal { width: 12px; margin: -5px 0;
-            background: #E7DCFF; border-radius: 6px; }
+        QFrame#analysisCard { border-left: 3px solid #2DD4BF; }
+        QLabel#analysisStatus { color: #AAB2C2; }
+        QLabel[role="analysisMetric"] { color: #CFC3FF; background: #201A35;
+            border: 1px solid #44376C; border-radius: 7px; padding: 6px 9px;
+            font-size: 10px; font-weight: 800; }
         QFrame#playlistSidebar { background: #0F131C; border: 0; border-right: 1px solid #252C3A;
             border-top-left-radius: 12px; border-bottom-left-radius: 12px; }
         QLabel#navigationTitle, QLabel#activePlaylistContext { color: #747E94; font-size: 10px;
@@ -947,19 +846,25 @@ void MainWindow::importFilePaths(const QStringList &paths)
 {
     static const QSet<QString> supported{"flac", "wav", "aiff", "aif", "mp3", "m4a", "ogg"};
     int imported = 0;
+    QList<int> analysisIds;
     for (const auto &path : paths) {
         QFileInfo info(path);
         if (!info.isFile() || !supported.contains(info.suffix().toLower())) continue;
         const ProbedTrack metadata = AudioProbe::read(path);
-        m_database.addTrack(metadata.title, metadata.artist.isEmpty() ? "Unbekannt" : metadata.artist,
-                            metadata.genre.isEmpty() ? "Other" : metadata.genre, metadata.bpm,
-                            metadata.musicalKey, 5, metadata.label, metadata.releaseDate,
-                            QUrl::fromLocalFile(path).toString(), path, true);
-        ++imported;
+        const int trackId = m_database.addTrackReturningId(
+            metadata.title, metadata.artist.isEmpty() ? "Unbekannt" : metadata.artist,
+            metadata.genre.isEmpty() ? "Other" : metadata.genre, metadata.bpm,
+            metadata.musicalKey, 5, metadata.label, metadata.releaseDate,
+            QUrl::fromLocalFile(path).toString(), path, true);
+        if (trackId >= 0) {
+            analysisIds << trackId;
+            ++imported;
+        }
     }
     m_model->select();
     updateLibrarySummary();
     setActivity(QString("%1 Datei(en) importiert; Metadaten können direkt editiert werden.").arg(imported));
+    enqueueTrackAnalysis(analysisIds);
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *event)
@@ -1319,12 +1224,12 @@ void MainWindow::addSelectedToPlaylist()
     const QString name = QInputDialog::getItem(this, "In Playlist kopieren", "Ziel-Playlist:", names, 0, false, &ok);
     if (!ok) return;
     const int targetId = ids.value(names.indexOf(name), -1);
-    int copied = 0;
-    for (const int trackId : trackIds) {
-        if (m_database.addToPlaylist(targetId, trackId)) ++copied;
+    if (!m_database.addTracksToPlaylist(targetId, trackIds)) {
+        QMessageBox::warning(this, "In Playlist kopieren", m_database.lastError());
+        return;
     }
     refreshPlaylistNavigation();
-    setActivity(QString("%1 Track(s) in '%2' kopiert.").arg(copied).arg(name));
+    setActivity(QString("%1 Track(s) in '%2' kopiert.").arg(trackIds.size()).arg(name));
 }
 
 void MainWindow::moveSelectedToPlaylist()
@@ -1340,22 +1245,45 @@ void MainWindow::moveSelectedToPlaylist()
     QStringList names;
     QList<int> ids;
     while (q.next()) { ids << q.value(0).toInt(); names << q.value(1).toString(); }
-    if (ids.size() < 2) {
-        QMessageBox::information(this, "Playlist verschieben",
-                                 "Zum Verschieben werden mindestens zwei Playlists benötigt.");
+    QStringList sourceNames;
+    QList<int> sourceIds;
+    QSqlQuery membership(m_database.connection());
+    membership.prepare("SELECT COUNT(DISTINCT track_id) FROM playlist_tracks "
+                       "WHERE playlist_id=? AND track_id=?");
+    for (int playlistIndex = 0; playlistIndex < ids.size(); ++playlistIndex) {
+        bool containsAll = true;
+        for (const int trackId : selectedIds) {
+            membership.bindValue(0, ids.at(playlistIndex));
+            membership.bindValue(1, trackId);
+            if (!membership.exec() || !membership.next() || membership.value(0).toInt() != 1) {
+                containsAll = false;
+            }
+            membership.finish();
+            if (!containsAll) break;
+        }
+        if (containsAll) {
+            sourceIds << ids.at(playlistIndex);
+            sourceNames << names.at(playlistIndex);
+        }
+    }
+    if (sourceIds.isEmpty()) {
+        QMessageBox::information(
+            this, "Playlist verschieben",
+            "Die ausgewählten Tracks sind nicht gemeinsam in einer Playlist. "
+            "Du kannst sie stattdessen in eine Playlist kopieren.");
         return;
     }
 
-    int sourceId = m_playlistFilterId;
-    QString sourceName;
-    if (sourceId >= 0) {
-        sourceName = names.value(ids.indexOf(sourceId));
-    } else {
+    int sourceId = sourceIds.contains(m_playlistFilterId) ? m_playlistFilterId : -1;
+    QString sourceName = sourceId >= 0
+        ? sourceNames.value(sourceIds.indexOf(sourceId)) : QString();
+    if (sourceId < 0) {
         bool sourceAccepted = false;
         sourceName = QInputDialog::getItem(this, "Aus Playlist verschieben",
-                                           "Quell-Playlist:", names, 0, false, &sourceAccepted);
+                                           "Quell-Playlist:", sourceNames, 0, false,
+                                           &sourceAccepted);
         if (!sourceAccepted) return;
-        sourceId = ids.value(names.indexOf(sourceName), -1);
+        sourceId = sourceIds.value(sourceNames.indexOf(sourceName), -1);
     }
 
     QStringList targetNames;
@@ -1365,6 +1293,11 @@ void MainWindow::moveSelectedToPlaylist()
         targetIds << ids.at(index);
         targetNames << names.at(index);
     }
+    if (targetIds.isEmpty()) {
+        QMessageBox::information(this, "Playlist verschieben",
+                                 "Bitte zuerst eine weitere Ziel-Playlist erstellen.");
+        return;
+    }
     bool targetAccepted = false;
     const QString targetName = QInputDialog::getItem(this, "In Playlist verschieben",
                                                      "Ziel-Playlist:", targetNames, 0, false,
@@ -1372,28 +1305,14 @@ void MainWindow::moveSelectedToPlaylist()
     if (!targetAccepted) return;
     const int targetId = targetIds.value(targetNames.indexOf(targetName), -1);
 
-    QList<int> movableIds;
-    QSqlQuery membership(m_database.connection());
-    membership.prepare("SELECT 1 FROM playlist_tracks WHERE playlist_id=? AND track_id=?");
-    for (const int trackId : selectedIds) {
-        membership.bindValue(0, sourceId);
-        membership.bindValue(1, trackId);
-        if (membership.exec() && membership.next()) movableIds << trackId;
-        membership.finish();
-    }
-    if (movableIds.isEmpty()) {
-        QMessageBox::information(this, "Playlist verschieben",
-                                 QString("Die Auswahl ist nicht in '%1' enthalten.").arg(sourceName));
-        return;
-    }
-    if (!m_database.moveTracksBetweenPlaylists(sourceId, targetId, movableIds)) {
+    if (!m_database.moveTracksBetweenPlaylists(sourceId, targetId, selectedIds)) {
         QMessageBox::warning(this, "Playlist verschieben", m_database.lastError());
         return;
     }
     refreshPlaylistNavigation();
     activatePlaylist(targetId);
     setActivity(QString("%1 Track(s) von '%2' nach '%3' verschoben.")
-                    .arg(movableIds.size()).arg(sourceName, targetName));
+                    .arg(selectedIds.size()).arg(sourceName, targetName));
 }
 
 void MainWindow::showPlaylist()
@@ -1401,176 +1320,6 @@ void MainWindow::showPlaylist()
     m_playlistList->setFocus(Qt::ShortcutFocusReason);
     if (m_playlistList->currentItem()) m_playlistList->scrollToItem(m_playlistList->currentItem());
     setActivity(QStringLiteral("Playlist-Navigation aktiv – mit Pfeiltasten wechseln."));
-}
-
-void MainWindow::loadSelectedIntoDeck(int deckIndex)
-{
-    const auto rows = m_table->selectionModel()->selectedRows();
-    if (rows.isEmpty()) {
-        QMessageBox::information(this, QStringLiteral("Deck laden"),
-                                 QStringLiteral("Bitte zuerst einen lokalen Track auswählen."));
-        return;
-    }
-    const int row = rows.first().row();
-    const QString filePath = m_model->data(m_model->index(row, 10)).toString();
-    if (filePath.isEmpty() || !QFileInfo::exists(filePath)) {
-        QMessageBox::information(this, QStringLiteral("Deck laden"),
-                                 QStringLiteral("Dieser Eintrag besitzt keine verfügbare lokale Audiodatei."));
-        return;
-    }
-
-    DeckState &deck = m_decks.at(static_cast<size_t>(deckIndex));
-    DeckState &otherDeck = m_decks.at(static_cast<size_t>(1 - deckIndex));
-    otherDeck.syncEnabled = false;
-    otherDeck.syncButton->setChecked(false);
-    deck.player->stop();
-    deck.player->setPlaybackRate(1.0);
-    deck.player->setSource(QUrl::fromLocalFile(filePath));
-    deck.trackId = m_model->data(m_model->index(row, 0)).toInt();
-    deck.filePath = filePath;
-    deck.bpm = m_model->data(m_model->index(row, 4)).toDouble();
-    deck.firstBeatMs = m_model->data(m_model->index(row, 13)).toDouble();
-    deck.confidence = m_model->data(m_model->index(row, 14)).toDouble();
-    deck.beatgridAnalyzed = m_model->data(m_model->index(row, 15)).toBool()
-                            && deck.bpm > 0.0;
-    deck.nominalSyncRate = 1.0;
-    deck.syncEnabled = false;
-    deck.syncButton->setChecked(false);
-    deck.sliderPressed = false;
-    deck.positionSlider->setValue(0);
-    deck.positionSlider->setEnabled(true);
-
-    const QString title = m_model->data(m_model->index(row, 1)).toString();
-    const QString artist = m_model->data(m_model->index(row, 2)).toString();
-    deck.titleLabel->setText(artist.isEmpty() ? title
-                                              : QStringLiteral("%1 — %2").arg(artist, title));
-    deck.titleLabel->setToolTip(filePath);
-    deck.grid->setTrackLoaded(true);
-    if (deck.beatgridAnalyzed) {
-        deck.grid->setGrid(deck.bpm, deck.firstBeatMs, deck.confidence);
-        deck.stateLabel->setText(QStringLiteral("Beatgrid bereit · %1% Sicherheit")
-                                     .arg(qRound(deck.confidence * 100.0)));
-    } else {
-        deck.grid->setGrid(0.0, 0.0, 0.0);
-        deck.stateLabel->setText(QStringLiteral("Analyse wird vorbereitet …"));
-        m_beatAnalyzer.enqueue(deck.trackId, deck.filePath);
-    }
-    updateDeckDisplays();
-    setActivity(QStringLiteral("%1 in Deck %2 geladen.")
-                    .arg(deck.titleLabel->text(), deckIndex == 0 ? "A" : "B"));
-}
-
-void MainWindow::toggleDeckPlayback(int deckIndex)
-{
-    DeckState &deck = m_decks.at(static_cast<size_t>(deckIndex));
-    if (deck.trackId < 0 || deck.filePath.isEmpty()) return;
-    if (deck.player->playbackState() == QMediaPlayer::PlayingState) {
-        deck.player->pause();
-        deck.stateLabel->setText(QStringLiteral("Pausiert"));
-    } else {
-        if (deck.syncEnabled) applySyncCorrection(deckIndex);
-        deck.player->play();
-        deck.stateLabel->setText(deck.syncEnabled ? QStringLiteral("Sync aktiv")
-                                                  : QStringLiteral("Wiedergabe"));
-    }
-    updateDeckDisplays();
-}
-
-void MainWindow::syncDeck(int deckIndex)
-{
-    DeckState &target = m_decks.at(static_cast<size_t>(deckIndex));
-    DeckState &master = m_decks.at(static_cast<size_t>(1 - deckIndex));
-    if (target.syncEnabled) {
-        target.syncEnabled = false;
-        target.syncButton->setChecked(false);
-        target.nominalSyncRate = target.player->playbackRate();
-        target.stateLabel->setText(QStringLiteral("Sync deaktiviert"));
-        return;
-    }
-    if (!target.beatgridAnalyzed || !master.beatgridAnalyzed
-        || target.bpm <= 0.0 || master.bpm <= 0.0) {
-        target.syncButton->setChecked(false);
-        QMessageBox::information(this, QStringLiteral("Sync"),
-                                 QStringLiteral("Beide Decks benötigen ein analysiertes Beatgrid."));
-        return;
-    }
-
-    master.syncEnabled = false;
-    master.syncButton->setChecked(false);
-    target.nominalSyncRate = BeatSyncMath::tempoRatio(
-        target.bpm, master.bpm, master.player->playbackRate());
-    target.player->setPlaybackRate(target.nominalSyncRate);
-    target.syncEnabled = true;
-    target.syncButton->setChecked(true);
-    applySyncCorrection(deckIndex);
-    target.stateLabel->setText(QStringLiteral("Sync mit Deck %1 aktiv")
-                                   .arg(deckIndex == 0 ? "B" : "A"));
-    setActivity(QStringLiteral("Deck %1 synchronisiert: %2 BPM, Beatphase ausgerichtet.")
-                    .arg(deckIndex == 0 ? "A" : "B")
-                    .arg(target.bpm * target.nominalSyncRate, 0, 'f', 2));
-}
-
-void MainWindow::applySyncCorrection(int deckIndex)
-{
-    DeckState &target = m_decks.at(static_cast<size_t>(deckIndex));
-    DeckState &master = m_decks.at(static_cast<size_t>(1 - deckIndex));
-    if (!target.syncEnabled || !target.beatgridAnalyzed || !master.beatgridAnalyzed
-        || target.bpm <= 0.0 || master.bpm <= 0.0) return;
-
-    const double driftMs = BeatSyncMath::driftMilliseconds(
-        target.player->position(), target.bpm, target.firstBeatMs, target.nominalSyncRate,
-        master.player->position(), master.bpm, master.firstBeatMs);
-
-    if (master.player->playbackState() != QMediaPlayer::PlayingState) {
-        target.player->setPlaybackRate(target.nominalSyncRate);
-        return;
-    }
-
-    if (target.player->playbackState() != QMediaPlayer::PlayingState
-        || std::abs(driftMs) > 55.0) {
-        target.player->setPosition(BeatSyncMath::alignedPosition(
-            target.player->position(), target.player->duration(), target.bpm, target.firstBeatMs,
-            master.player->position(), master.bpm, master.firstBeatMs));
-        target.player->setPlaybackRate(target.nominalSyncRate);
-    } else {
-        target.player->setPlaybackRate(
-            BeatSyncMath::correctedPlaybackRate(target.nominalSyncRate, driftMs));
-    }
-
-    target.stateLabel->setText(QStringLiteral("Sync aktiv · Drift %1 ms")
-                                   .arg(qRound(std::abs(driftMs))));
-}
-
-void MainWindow::updateDeckDisplays()
-{
-    for (int deckIndex = 0; deckIndex < static_cast<int>(m_decks.size()); ++deckIndex) {
-        DeckState &deck = m_decks.at(static_cast<size_t>(deckIndex));
-        if (!deck.player) continue;
-        if (deck.syncEnabled) applySyncCorrection(deckIndex);
-
-        const qint64 position = deck.player->position();
-        const qint64 duration = deck.player->duration();
-        if (!deck.sliderPressed && duration > 0)
-            deck.positionSlider->setValue(qRound(position * 1000.0 / duration));
-        deck.timeLabel->setText(QStringLiteral("%1 / %2").arg(deckTime(position), deckTime(duration)));
-        deck.grid->setPlayback(position, duration, deck.player->playbackRate());
-        deck.playButton->setEnabled(deck.trackId >= 0);
-        deck.playButton->setText(deck.player->playbackState() == QMediaPlayer::PlayingState
-                                     ? QStringLiteral("Ⅱ") : QStringLiteral("▶"));
-        if (deck.beatgridAnalyzed) {
-            const double effectiveBpm = deck.bpm * deck.player->playbackRate();
-            deck.bpmLabel->setText(qFuzzyCompare(deck.player->playbackRate(), 1.0)
-                ? QStringLiteral("%1 BPM").arg(deck.bpm, 0, 'f', 2)
-                : QStringLiteral("%1 BPM").arg(effectiveBpm, 0, 'f', 2));
-        } else if (deck.bpm > 0.0) {
-            deck.bpmLabel->setText(QStringLiteral("~%1 BPM").arg(deck.bpm, 0, 'f', 2));
-        } else {
-            deck.bpmLabel->setText(QStringLiteral("— BPM"));
-        }
-    }
-    const bool bothReady = m_decks[0].beatgridAnalyzed && m_decks[1].beatgridAnalyzed;
-    m_decks[0].syncButton->setEnabled(bothReady);
-    m_decks[1].syncButton->setEnabled(bothReady);
 }
 
 void MainWindow::playSelected()
@@ -1597,18 +1346,179 @@ void MainWindow::playSelected()
     m_status->setText("Wiedergabe: " + QFileInfo(path).fileName());
 }
 
+void MainWindow::analyzeSelectedTracks()
+{
+    const QList<int> trackIds = selectedTrackIds();
+    if (trackIds.isEmpty()) {
+        QMessageBox::information(this, "Track-Analyse", "Bitte mindestens einen Track auswählen.");
+        return;
+    }
+    if (enqueueTrackAnalysis(trackIds) == 0) {
+        QMessageBox::information(
+            this, "Track-Analyse",
+            "Die Auswahl enthält keine verfügbare lokale Audiodatei oder wird bereits analysiert.");
+    }
+}
+
+void MainWindow::analyzeAllLocalTracks()
+{
+    QList<int> trackIds;
+    QSqlQuery query(m_database.connection());
+    if (!query.exec("SELECT id FROM tracks WHERE local_path IS NOT NULL AND local_path<>''")) {
+        QMessageBox::warning(this, "Track-Analyse", query.lastError().text());
+        return;
+    }
+    while (query.next()) trackIds << query.value(0).toInt();
+    if (enqueueTrackAnalysis(trackIds) == 0) {
+        QMessageBox::information(this, "Track-Analyse",
+                                 "Es wurden keine verfügbaren lokalen Audiodateien gefunden.");
+    }
+}
+
+int MainWindow::enqueueTrackAnalysis(const QList<int> &trackIds)
+{
+    if (trackIds.isEmpty()) return 0;
+    if (!m_beatAnalyzer.isBusy()) {
+        m_analysisTotal = 0;
+        m_analysisCompleted = 0;
+        m_analysisFailed = 0;
+    }
+
+    QSet<int> uniqueIds(trackIds.begin(), trackIds.end());
+    QSqlQuery query(m_database.connection());
+    query.prepare("SELECT local_path FROM tracks WHERE id=?");
+    int queued = 0;
+    for (const int trackId : uniqueIds) {
+        query.bindValue(0, trackId);
+        if (query.exec() && query.next()) {
+            const QString filePath = query.value(0).toString();
+            if (!filePath.isEmpty() && QFileInfo::exists(filePath)
+                && m_beatAnalyzer.enqueue(trackId, filePath)) {
+                ++queued;
+            }
+        }
+        query.finish();
+    }
+    m_analysisTotal += queued;
+    updateAnalysisSummary();
+    return queued;
+}
+
+void MainWindow::updateAnalysisSummary()
+{
+    if (!m_analysisStatus) return;
+    const int processed = m_analysisCompleted + m_analysisFailed;
+    if (m_analysisTotal == 0) {
+        m_analysisStatus->setText("Lokale Tracks auswählen oder gesamte Bibliothek analysieren.");
+    } else if (processed < m_analysisTotal || m_beatAnalyzer.isBusy()) {
+        m_analysisStatus->setText(
+            QString("%1/%2 abgeschlossen · %3 Fehler").arg(processed).arg(m_analysisTotal)
+                .arg(m_analysisFailed));
+    } else {
+        m_analysisStatus->setText(
+            QString("%1 Track(s) analysiert · %2 Fehler")
+                .arg(m_analysisCompleted).arg(m_analysisFailed));
+    }
+}
+
+void MainWindow::showTrackContextMenu(const QPoint &position)
+{
+    const QModelIndex clicked = m_table->indexAt(position);
+    if (clicked.isValid()
+        && !m_table->selectionModel()->isRowSelected(clicked.row(), QModelIndex())) {
+        m_table->selectRow(clicked.row());
+    }
+    if (selectedTrackIds().isEmpty()) return;
+
+    QMenu menu(this);
+    QAction *rename = menu.addAction("Umbenennen …");
+    rename->setEnabled(selectedTrackIds().size() == 1);
+    QAction *move = menu.addAction("In Playlist verschieben …");
+    menu.addSeparator();
+    QAction *remove = menu.addAction(style()->standardIcon(QStyle::SP_TrashIcon),
+                                     "Ausgewählte Tracks löschen");
+    QAction *chosen = menu.exec(m_table->viewport()->mapToGlobal(position));
+    if (chosen == rename) renameSelectedTrack();
+    else if (chosen == move) moveSelectedToPlaylist();
+    else if (chosen == remove) removeSelected();
+}
+
+void MainWindow::renameSelectedTrack()
+{
+    const QList<int> trackIds = selectedTrackIds();
+    if (trackIds.size() != 1) {
+        QMessageBox::information(this, "Track umbenennen",
+                                 "Bitte genau einen Track auswählen.");
+        return;
+    }
+    QSqlQuery query(m_database.connection());
+    query.prepare("SELECT title FROM tracks WHERE id=?");
+    query.addBindValue(trackIds.first());
+    if (!query.exec() || !query.next()) {
+        QMessageBox::warning(this, "Track umbenennen", query.lastError().text());
+        return;
+    }
+    bool accepted = false;
+    const QString title = QInputDialog::getText(
+        this, "Track umbenennen", "Neuer Titel:", QLineEdit::Normal,
+        query.value(0).toString(), &accepted).trimmed();
+    if (!accepted || title.isEmpty()) return;
+    if (!m_database.renameTrack(trackIds.first(), title)) {
+        QMessageBox::warning(this, "Track umbenennen", m_database.lastError());
+        return;
+    }
+    refreshFilter();
+    setActivity(QString("Track in '%1' umbenannt.").arg(title));
+}
+
 void MainWindow::removeSelected()
 {
-    const int id = selectedTrackId();
-    if (id < 0) { QMessageBox::information(this, "Entfernen", "Bitte einen Track auswählen."); return; }
-    if (QMessageBox::question(this, "Eintrag entfernen",
-            "Soll der Bibliothekseintrag entfernt werden? Die Audiodatei selbst bleibt erhalten.") != QMessageBox::Yes) return;
-    QSqlQuery q(m_database.connection());
-    q.prepare("DELETE FROM tracks WHERE id=?");
-    q.addBindValue(id);
-    if (!q.exec()) QMessageBox::warning(this, "Entfernen", q.lastError().text());
-    m_model->select();
+    const QList<int> trackIds = selectedTrackIds();
+    if (trackIds.isEmpty()) {
+        QMessageBox::information(this, "Entfernen", "Bitte mindestens einen Track auswählen.");
+        return;
+    }
+    const QString prompt = trackIds.size() == 1
+        ? QStringLiteral("Soll der ausgewählte Bibliothekseintrag entfernt werden? ")
+        : QStringLiteral("Sollen die %1 ausgewählten Bibliothekseinträge entfernt werden? ")
+              .arg(trackIds.size());
+    if (QMessageBox::question(this, "Einträge entfernen",
+                              prompt + "Die Audiodateien selbst bleiben erhalten.")
+        != QMessageBox::Yes) return;
+    if (!m_database.deleteTracks(trackIds)) {
+        QMessageBox::warning(this, "Entfernen", m_database.lastError());
+        return;
+    }
+    refreshFilter();
     updateLibrarySummary();
+    setActivity(QString("%1 Bibliothekseintrag/-einträge entfernt.").arg(trackIds.size()));
+}
+
+void MainWindow::removeAllVisible()
+{
+    while (m_model->canFetchMore()) m_model->fetchMore();
+    QList<int> trackIds;
+    for (int row = 0; row < m_model->rowCount(); ++row)
+        trackIds << m_model->data(m_model->index(row, 0)).toInt();
+    if (trackIds.isEmpty()) {
+        QMessageBox::information(this, "Alle sichtbaren entfernen",
+                                 "In der aktuellen Ansicht sind keine Tracks vorhanden.");
+        return;
+    }
+    if (QMessageBox::warning(
+            this, "Alle sichtbaren Einträge entfernen",
+            QString("Sollen wirklich alle %1 sichtbaren Bibliothekseinträge entfernt werden? "
+                    "Die Audiodateien selbst bleiben erhalten.").arg(trackIds.size()),
+            QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Yes) {
+        return;
+    }
+    if (!m_database.deleteTracks(trackIds)) {
+        QMessageBox::warning(this, "Entfernen", m_database.lastError());
+        return;
+    }
+    refreshFilter();
+    updateLibrarySummary();
+    setActivity(QString("Alle %1 sichtbaren Bibliothekseinträge entfernt.").arg(trackIds.size()));
 }
 
 void MainWindow::checkForUpdates(bool manual)

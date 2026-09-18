@@ -21,13 +21,13 @@ Audiobibliothek.
 - direkter Download von Audio-URLs ohne wiederholte Bestätigungsdialoge
 - FLAC- und 24-Bit-WAV-Export lokaler Dateien über FFmpeg
 - Playlist-/Set-Grundfunktionen und Wiedergabe lokaler Tracks
-- Mehrfachauswahl sowie Kopieren oder Verschieben von Tracks zwischen lokalen Playlists
+- transaktionales Kopieren oder Verschieben mehrerer Tracks zwischen lokalen Playlists
 - dauerhaft sichtbare Playlist-Navigation mit aktiver Hervorhebung, Trackanzahl und schnellem Wechsel
-- zwei unabhängige Performance-Decks für lokale Tracks mit Play/Pause, Positionsanzeige und Beatgrid
-- automatische BPM- und Beatgrid-Analyse beim Laden eines noch nicht analysierten Tracks in ein Deck
-- Sync pro Deck: Tempo-Matching, Beatphasen-Ausrichtung und laufende Driftkorrektur zum anderen Deck
+- automatische Analyse lokaler Tracks auf BPM, musikalischen Key, Energy und vorhandenes Label-Tag
+- Analyse der Auswahl oder aller lokalen Tracks direkt aus dem kompakten Analysebereich
 - automatische Übernahme vorhandener Audio-Tags über FFprobe
-- sicheres Entfernen von Bibliothekseinträgen ohne Löschen der Audiodatei
+- Rechtsklick-Aktionen zum Umbenennen, Verschieben und Entfernen von Tracks
+- sicheres Entfernen eines, mehrerer oder aller sichtbaren Bibliothekseinträge ohne Löschen der Audiodateien
 - modernes Desktop-Dashboard mit kompakten Statistiken, nativen Menüs und Tastenkürzeln
 - Drag-and-drop-Import aus Windows Explorer und macOS Finder
 - identische Bibliothek und Download-Warteschlange auf Windows und macOS
@@ -86,7 +86,7 @@ gestartet werden. Nach der ersten erfolgreichen Ausführung liegt die Seite norm
 `https://DEIN-NAME.github.io/DEIN-REPOSITORY/`.
 
 Vor einer neuen veröffentlichten Version muss die Versionsnummer ganz oben in `CMakeLists.txt`
-erhöht werden, zum Beispiel von `0.10.0` auf `0.10.1`. Ein Push ohne höhere Versionsnummer ersetzt
+erhöht werden, zum Beispiel von `0.11.0` auf `0.11.1`. Ein Push ohne höhere Versionsnummer ersetzt
 zwar den Pages-Build, löst in bereits installierten Apps aber absichtlich keine Update-Meldung aus.
 Der Workflow behält nur die jeweils aktuellen Pakete auf Pages, damit alte große Installer und DMGs
 nicht unnötig Speicherplatz verbrauchen.
