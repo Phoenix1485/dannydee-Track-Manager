@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(DannyDeeTrackManager VERSION 0.9.0 LANGUAGES CXX)
+project(DannyDeeTrackManager VERSION 0.10.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -74,6 +74,15 @@ if(BUILD_TESTING)
     )
     target_link_libraries(DannyDeeUpdateVersionTest PRIVATE Qt6::Core Qt6::Network)
     add_test(NAME update_version_comparison COMMAND DannyDeeUpdateVersionTest)
+
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME multi_platform_update_site
+            COMMAND "${Python3_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/UpdateSiteGeneratorTest.py"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/scripts/create_update_site.py"
+        )
+    endif()
 
     qt_add_executable(DannyDeePlaylistTest
         tests/PlaylistFeatureTest.cpp

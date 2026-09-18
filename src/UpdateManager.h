@@ -19,6 +19,7 @@ public:
     QString manifestUrl() const;
 
     static bool isNewerVersion(const QString &candidate, const QString &installed);
+    static QString currentPlatformKey();
 
 public slots:
     void checkForUpdates();
@@ -45,8 +46,6 @@ private:
     void finishManifestRequest(QNetworkReply *reply);
     void finishDownload(QNetworkReply *reply);
     void failDownload(const QString &message);
-    static QString platformKey();
-
     QNetworkAccessManager *m_network = nullptr;
     QNetworkReply *m_checkReply = nullptr;
     QNetworkReply *m_downloadReply = nullptr;

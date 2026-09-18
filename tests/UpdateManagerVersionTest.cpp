@@ -25,5 +25,20 @@ int main()
             return 1;
         }
     }
+
+#if defined(Q_OS_WIN) && defined(Q_PROCESSOR_X86_64)
+    const QString expectedPlatform = QStringLiteral("windows-x64");
+#elif defined(Q_OS_MACOS) && defined(Q_PROCESSOR_ARM_64)
+    const QString expectedPlatform = QStringLiteral("macos-arm64");
+#elif defined(Q_OS_MACOS) && defined(Q_PROCESSOR_X86_64)
+    const QString expectedPlatform = QStringLiteral("macos-x64");
+#else
+    const QString expectedPlatform;
+#endif
+    if (UpdateManager::currentPlatformKey() != expectedPlatform) {
+        std::cerr << "Unexpected update platform key: "
+                  << UpdateManager::currentPlatformKey().toStdString() << '\n';
+        return 1;
+    }
     return 0;
 }

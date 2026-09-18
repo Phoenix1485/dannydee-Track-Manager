@@ -83,28 +83,138 @@ jobs:
             -UpdateManifestUrl "$pagesBase/updates.json" `
             -Clean
 
-      - name: Generate GitHub Pages update site
-        shell: pwsh
+      - name: Upload Windows release
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: dist/DannyDee-Track-Manager-*-Windows-x64-Setup.exe
+          if-no-files-found: error
+          retention-days: 2
+
+  build-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            platform: macos-arm64
+            artifact: macos-release-arm64
+          - runner: macos-15-intel
+            platform: macos-x64
+            artifact: macos-release-x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install Qt
+        shell: bash
         run: |
-          $owner = $env:GITHUB_REPOSITORY_OWNER.ToLowerInvariant()
-          $repository = ($env:GITHUB_REPOSITORY -split '/')[1]
-          if ($repository.ToLowerInvariant() -eq "$owner.github.io") {
-            $pagesBase = "https://$owner.github.io"
-          } else {
-            $pagesBase = "https://$owner.github.io/$repository"
-          }
-          $project = Select-String -LiteralPath "CMakeLists.txt" `
-            -Pattern '^project\(DannyDeeTrackManager VERSION ([0-9]+\.[0-9]+\.[0-9]+)' | Select-Object -First 1
-          if (-not $project) { throw "Project version not found." }
-          $version = $project.Matches[0].Groups[1].Value
-          $installer = Get-Item -LiteralPath "dist\DannyDee-Track-Manager-$version-Windows-x64-Setup.exe"
-          $shortSha = $env:GITHUB_SHA.Substring(0, 7)
-          .\scripts\New-UpdateSite.ps1 `
-            -InstallerPath $installer.FullName `
-            -OutputDirectory "update-site" `
-            -BaseUrl $pagesBase `
-            -Version $version `
-            -Notes "Automatischer Build aus Commit $shortSha."
+          python -m pip install "aqtinstall==3.3.*"
+          python -m aqt install-qt mac desktop 6.8.3 clang_64 \
+            -O "$RUNNER_TEMP/Qt" -m qtmultimedia
+
+      - name: Install Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Install FFmpeg and build spotDL
+        shell: bash
+        run: |
+          brew install ffmpeg
+          curl --fail --location --retry 3 \
+            "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos" \
+            --output "$RUNNER_TEMP/yt-dlp"
+          chmod +x "$RUNNER_TEMP/yt-dlp"
+
+          git clone --depth 1 --branch v4.5.2 \
+            https://github.com/spotDL/spotify-downloader.git "$RUNNER_TEMP/spotdl-source"
+          python -m pip install uv
+          cd "$RUNNER_TEMP/spotdl-source"
+          uv sync
+          uv run python scripts/build.py
+          spotdl_binary="$(find dist -type f | head -n 1)"
+          test -n "$spotdl_binary"
+          cp "$spotdl_binary" "$RUNNER_TEMP/spotdl"
+          chmod +x "$RUNNER_TEMP/spotdl"
+
+      - name: Build and package macOS app
+        shell: bash
+        env:
+          QT_ROOT: ${{ runner.temp }}/Qt/6.8.3/macos
+          MACOS_PLATFORM_KEY: ${{ matrix.platform }}
+          FFMPEG_PATH: /opt/homebrew/bin/ffmpeg
+          FFPROBE_PATH: /opt/homebrew/bin/ffprobe
+          YTDLP_PATH: ${{ runner.temp }}/yt-dlp
+          SPOTDL_PATH: ${{ runner.temp }}/spotdl
+          CLEAN: "1"
+        run: |
+          if [[ ! -x "$FFMPEG_PATH" ]]; then
+            export FFMPEG_PATH="$(command -v ffmpeg)"
+            export FFPROBE_PATH="$(command -v ffprobe)"
+          fi
+          export DENO_PATH="$(command -v deno)"
+          owner="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          repository="${GITHUB_REPOSITORY#*/}"
+          repository_lower="$(printf '%s' "$repository" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$repository_lower" == "$owner.github.io" ]]; then
+            export UPDATE_MANIFEST_URL="https://$owner.github.io/updates.json"
+          else
+            export UPDATE_MANIFEST_URL="https://$owner.github.io/$repository/updates.json"
+          fi
+          chmod +x scripts/build-macos.sh
+          scripts/build-macos.sh
+
+      - name: Upload macOS release
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/DannyDee-Track-Manager-*-macOS-*.dmg
+          if-no-files-found: error
+          retention-days: 2
+
+  build-update-site:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*-release*"
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Generate multi-platform update site
+        shell: bash
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          repository="${GITHUB_REPOSITORY#*/}"
+          if [[ "${repository,,}" == "$owner.github.io" ]]; then
+            pages_base="https://$owner.github.io"
+          else
+            pages_base="https://$owner.github.io/$repository"
+          fi
+          version="$(sed -nE 's/^project\(DannyDeeTrackManager VERSION ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' CMakeLists.txt | head -n 1)"
+          windows="$(find release-artifacts -name '*Windows-x64-Setup.exe' -type f -print -quit)"
+          mac_arm="$(find release-artifacts -name '*macOS-arm64.dmg' -type f -print -quit)"
+          mac_x64="$(find release-artifacts -name '*macOS-x64.dmg' -type f -print -quit)"
+          python scripts/create_update_site.py \
+            --output update-site \
+            --base-url "$pages_base" \
+            --version "$version" \
+            --notes "Automatischer Windows- und macOS-Build aus Commit ${GITHUB_SHA:0:7}." \
+            --artifact "windows-x64=$windows" \
+            --artifact "macos-arm64=$mac_arm" \
+            --artifact "macos-x64=$mac_x64"
 
       - name: Upload generated site
         uses: actions/upload-artifact@v4
@@ -116,7 +226,7 @@ jobs:
           retention-days: 2
 
   deploy-pages:
-    needs: build-windows
+    needs: build-update-site
     runs-on: ubuntu-latest
     permissions:
       pages: write

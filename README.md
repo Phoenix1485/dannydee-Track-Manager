@@ -64,8 +64,9 @@ einbetten. Dafür sind weiterhin keine API-Zugangsdaten erforderlich.
 ## Automatische Updates über GitHub Pages
 
 Die Workflow-Datei `.github/workflows/publish-updates.yml` baut bei jedem Push auf `main` einen
-aktuellen Windows-Installer. Anschließend veröffentlicht sie nur diesen Installer, eine kleine
-Downloadseite und `updates.json` auf GitHub Pages. Die Update-Adresse wird beim CI-Build automatisch
+Windows-x64-Installer sowie getrennte macOS-DMGs für Apple Silicon und Intel. Anschließend
+veröffentlicht sie die drei Pakete, eine kleine Downloadseite und `updates.json` auf GitHub Pages.
+Die Update-Adresse wird beim CI-Build automatisch
 aus Eigentümer und Repository-Name gebildet und direkt in die App kompiliert. Es ist kein eigener
 API-Schlüssel nötig; GitHub stellt dem Workflow sein kurzlebiges `GITHUB_TOKEN` selbst bereit.
 
@@ -85,9 +86,9 @@ gestartet werden. Nach der ersten erfolgreichen Ausführung liegt die Seite norm
 `https://DEIN-NAME.github.io/DEIN-REPOSITORY/`.
 
 Vor einer neuen veröffentlichten Version muss die Versionsnummer ganz oben in `CMakeLists.txt`
-erhöht werden, zum Beispiel von `0.9.0` auf `0.9.1`. Ein Push ohne höhere Versionsnummer ersetzt
+erhöht werden, zum Beispiel von `0.10.0` auf `0.10.1`. Ein Push ohne höhere Versionsnummer ersetzt
 zwar den Pages-Build, löst in bereits installierten Apps aber absichtlich keine Update-Meldung aus.
-Der Workflow behält nur die jeweils aktuelle Setup-Datei auf Pages, damit alte große Installer
+Der Workflow behält nur die jeweils aktuellen Pakete auf Pages, damit alte große Installer und DMGs
 nicht unnötig Speicherplatz verbrauchen.
 
 Die Version `0.5.1` und ältere Builds kennen noch keine Update-Adresse. Der erste über GitHub
@@ -131,28 +132,36 @@ standardmäßig unter `%LOCALAPPDATA%\Programs`.
 
 ## macOS-App und DMG bauen
 
-Benötigt werden macOS, Qt 6, CMake und die Xcode Command Line Tools. Bei einer Homebrew-Installation
-wird Qt automatisch gefunden; andernfalls wird `QT_ROOT` gesetzt:
+Benötigt werden macOS 12 oder neuer, Qt 6, CMake, Ninja und die Xcode Command Line Tools. Die fünf
+Hilfsprogramme werden dem Skript explizit angegeben, damit ein unvollständiges DMG nicht unbemerkt
+veröffentlicht wird:
 
 ```bash
 chmod +x scripts/build-macos.sh
-QT_ROOT="$HOME/Qt/6.8.3/macos" ./scripts/build-macos.sh
+QT_ROOT="$HOME/Qt/6.8.3/macos" \
+FFMPEG_PATH="$(command -v ffmpeg)" \
+FFPROBE_PATH="$(command -v ffprobe)" \
+YTDLP_PATH="$(command -v yt-dlp)" \
+SPOTDL_PATH="$(command -v spotdl)" \
+DENO_PATH="$(command -v deno)" \
+MACOS_PLATFORM_KEY="macos-arm64" \
+./scripts/build-macos.sh
 ```
 
 Die Update-Adresse kann bei einem macOS-Paket mit
 `UPDATE_MANIFEST_URL="https://…/updates.json"` eingebettet werden. Das Manifestformat unterstützt
-`macos-arm64` und `macos-x64`; der mitgelieferte GitHub-Workflow veröffentlicht derzeit den vom
-Benutzer gewünschten Windows-Installer.
+`macos-arm64` und `macos-x64`; der GitHub-Workflow baut und veröffentlicht beide Varianten automatisch.
 
-FFmpeg, FFprobe, yt-dlp, spotDL und Deno werden aus dem `PATH` übernommen. Alternativ können
-`FFMPEG_PATH`, `FFPROBE_PATH`, `YTDLP_PATH`, `SPOTDL_PATH` und `DENO_PATH` auf eigenständige
-macOS-Programme zeigen. Das Skript legt die Werkzeuge in `Contents/Resources/tools`, führt
+`FFMPEG_PATH`, `FFPROBE_PATH`, `YTDLP_PATH`, `SPOTDL_PATH` und `DENO_PATH` müssen auf native
+macOS-Programme der gewählten Architektur zeigen. Das Skript legt die Werkzeuge in
+`Contents/Resources/tools`, kopiert benötigte Homebrew-Bibliotheken in das App-Bundle, führt
 `macdeployqt` aus, signiert die App standardmäßig ad hoc und erzeugt ein DMG unter `dist`.
 
-Für eine verteilbare, von Gatekeeper akzeptierte Veröffentlichung müssen zusätzlich eine Apple
-Developer-ID in `CODESIGN_IDENTITY` verwendet und das DMG anschließend notarisiert werden. Ein
-Universal-Build kann mit `CMAKE_OSX_ARCHITECTURES="arm64;x86_64"` angefordert werden, sofern Qt und
-alle eingebetteten Werkzeuge ebenfalls universal vorliegen.
+Zur Installation wird das passende DMG geöffnet und die App in `Applications` gezogen. Die
+automatischen Builds sind ad hoc signiert, da im Repository keine Apple-Developer-Zugangsdaten
+liegen. macOS kann deshalb beim ersten Start `Rechtsklick` > `Öffnen` verlangen. Eine ohne diesen
+Hinweis startende, notarisierte Veröffentlichung benötigt später ein Apple-Developer-ID-Zertifikat
+und Notarisierungs-Zugangsdaten als GitHub-Secrets.
 
 ## Rechtlicher und technischer Rahmen
 

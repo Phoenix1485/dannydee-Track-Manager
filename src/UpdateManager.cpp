@@ -65,7 +65,7 @@ bool UpdateManager::isNewerVersion(const QString &candidate, const QString &inst
     return QVersionNumber::compare(candidateVersion, installedVersion) > 0;
 }
 
-QString UpdateManager::platformKey()
+QString UpdateManager::currentPlatformKey()
 {
 #if defined(Q_OS_WIN) && defined(Q_PROCESSOR_X86_64)
     return QStringLiteral("windows-x64");
@@ -87,7 +87,7 @@ void UpdateManager::checkForUpdates()
         emit checkFailed(QStringLiteral("F\u00fcr diesen Build ist noch keine sichere Update-Adresse konfiguriert."));
         return;
     }
-    if (platformKey().isEmpty()) {
+    if (currentPlatformKey().isEmpty()) {
         emit checkFailed(QStringLiteral("F\u00fcr diese Plattform werden noch keine automatischen Updates angeboten."));
         return;
     }
@@ -129,7 +129,7 @@ void UpdateManager::finishManifestRequest(QNetworkReply *reply)
     }
 
     const QJsonObject artifact = root.value(QStringLiteral("platforms")).toObject()
-                                     .value(platformKey()).toObject();
+                                     .value(currentPlatformKey()).toObject();
     const QUrl downloadUrl(artifact.value(QStringLiteral("url")).toString());
     const QByteArray checksum = artifact.value(QStringLiteral("sha256")).toString()
                                     .trimmed().toLatin1().toLower();
