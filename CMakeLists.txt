@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(DannyDeeTrackManager VERSION 0.11.0 LANGUAGES CXX)
+project(DannyDeeTrackManager VERSION 0.11.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -50,6 +50,17 @@ install(TARGETS DannyDeeTrackManager
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(DannyDeeFakeSpotDl tests/FakeSpotDl.cpp)
+    set_target_properties(DannyDeeFakeSpotDl PROPERTIES
+        OUTPUT_NAME "spotdl"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/test-tools"
+    )
+    add_executable(DannyDeeFakeFfmpeg tests/FakeFfmpeg.cpp)
+    set_target_properties(DannyDeeFakeFfmpeg PROPERTIES
+        OUTPUT_NAME "ffmpeg"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/test-tools"
+    )
+
     qt_add_executable(DannyDeeDownloadFallbackTest
         tests/DownloadManagerFallbackTest.cpp
         src/DownloadManager.cpp src/DownloadManager.h
@@ -60,7 +71,12 @@ if(BUILD_TESTING)
         src "${CMAKE_CURRENT_BINARY_DIR}/generated"
     )
     target_link_libraries(DannyDeeDownloadFallbackTest PRIVATE Qt6::Core Qt6::Network)
-    add_test(NAME spotify_strict_source_mode COMMAND DannyDeeDownloadFallbackTest)
+    add_dependencies(DannyDeeDownloadFallbackTest DannyDeeFakeSpotDl DannyDeeFakeFfmpeg)
+    add_test(NAME spotify_audio_source_resolution COMMAND DannyDeeDownloadFallbackTest)
+    set_tests_properties(spotify_audio_source_resolution PROPERTIES
+        ENVIRONMENT "DANNYDEE_TOOLS_DIR=${CMAKE_BINARY_DIR}/test-tools"
+        TIMEOUT 15
+    )
 
     qt_add_executable(DannyDeeUpdateVersionTest
         tests/UpdateManagerVersionTest.cpp

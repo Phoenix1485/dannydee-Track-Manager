@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include <QTemporaryDir>
+#include <QTimer>
 
 int main(int argc, char *argv[])
 {
@@ -19,8 +20,12 @@ int main(int argc, char *argv[])
     });
     QObject::connect(&manager, &DownloadManager::failed, &app,
                      [&](const QString &message, const QString &) {
-        result = message.contains("strikten Quellenmodus")
-                     && message.contains("keine YouTube-") ? 0 : 5;
+        result = message.contains("FAKE_SPOTDL_EXTERNAL_AUDIO_ENABLED")
+                     && !message.contains("strikten Quellenmodus") ? 0 : 5;
+        app.quit();
+    });
+    QTimer::singleShot(10000, &app, [&] {
+        result = 6;
         app.quit();
     });
 

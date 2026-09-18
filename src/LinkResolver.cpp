@@ -17,7 +17,7 @@ ResolvedLink LinkResolver::resolve(const QString &input)
                   "Der Link wird über den generischen yt-dlp-Resolver versucht."};
     } else if (host.contains("spotify.com") || host == "spotify.link") {
         result = {"Spotify", "Streaming", url, false,
-                  "Spotify-Metadaten und Playlists werden über spotDL eingelesen; im strikten Quellenmodus wird keine Audio-Ersatzquelle gesucht."};
+                  "Spotify-Metadaten werden über spotDL eingelesen; Audio wird über passende externe Quellen aufgelöst."};
     } else if (host.contains("soundcloud.com")) {
         result = {"SoundCloud", "Streaming", url, false,
                   "Öffentlich zugängliche Tracks werden ohne API-Schlüssel über yt-dlp verarbeitet."};

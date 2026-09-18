@@ -1099,23 +1099,18 @@ void MainWindow::downloadSelected()
     }
     const bool spotify = source.host().contains("spotify.com", Qt::CaseInsensitive)
                          || source.host().compare("spotify.link", Qt::CaseInsensitive) == 0;
-    if (spotify) {
-        QMessageBox::information(
-            this, "Spotify-Referenz",
-            "Spotify-Tracks und -Playlists werden als Metadaten und Original-Links verwaltet. "
-            "Im strikten Quellenmodus wird keine YouTube- oder andere Audio-Ersatzquelle verwendet. "
-            "Importiere eine rechtmäßig vorhandene lokale Audiodatei, um sie zu konvertieren oder abzuspielen.");
-        return;
-    }
     if (!m_downloader.mediaDownloaderAvailable(source)) {
         QMessageBox box(this);
-        box.setWindowTitle("yt-dlp fehlt");
-        box.setText("Für diesen Link werden yt-dlp und FFmpeg benötigt.");
+        box.setWindowTitle(spotify ? "spotDL fehlt" : "yt-dlp fehlt");
+        box.setText(QString("Für diesen Link werden %1 und FFmpeg benötigt.")
+                        .arg(spotify ? "spotDL" : "yt-dlp"));
         auto *open = box.addButton("Download-Seite öffnen", QMessageBox::ActionRole);
         box.addButton(QMessageBox::Ok);
         box.exec();
         if (box.clickedButton() == open)
-            QDesktopServices::openUrl(QUrl("https://github.com/yt-dlp/yt-dlp/releases/latest"));
+            QDesktopServices::openUrl(QUrl(spotify
+                ? "https://github.com/spotDL/spotify-downloader/releases/latest"
+                : "https://github.com/yt-dlp/yt-dlp/releases/latest"));
         return;
     }
 

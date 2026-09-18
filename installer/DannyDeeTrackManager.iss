@@ -1,6 +1,6 @@
 #define AppName "DannyDee Track Manager"
 #ifndef AppVersion
-  #define AppVersion "0.11.0"
+  #define AppVersion "0.11.1"
 #endif
 #ifndef StageDir
   #define StageDir "..\build\stage"

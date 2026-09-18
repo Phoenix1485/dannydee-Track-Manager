@@ -13,9 +13,9 @@ Audiobibliothek.
   Titel, Reihenfolge und einzelne Original-Tracklinks werden als lokale Playlist übernommen
 - Link-Erkennung für Spotify, TikTok, YouTube, SoundCloud, Bandcamp, SoundBeaver und viele weitere Seiten
 - API-schlüsselfreie Verarbeitung öffentlich zugänglicher Medien-Links über `yt-dlp`
-- Spotify-Metadaten und Playlist-Auflösung über `spotDL`, ohne YouTube- oder andere Audio-Ersatzquellen
-- strikter Quellenmodus: SoundCloud-, TikTok-, Bandcamp- und andere Links werden nur über die
-  jeweils eingegebene Adresse verarbeitet; Spotify bleibt eine Metadaten-/Playlist-Referenz
+- Spotify-Metadaten und Playlist-Auflösung über `spotDL`; für Audio sucht `spotDL` passende Quellen
+  über YouTube Music, YouTube, SoundCloud oder Bandcamp
+- SoundCloud-, TikTok-, Bandcamp- und andere Links werden direkt über die eingegebene Adresse verarbeitet
 - Warteschlange zum Export aller gespeicherten Internet-Links als FLAC; Fehler stoppen die restliche Liste nicht
 - MP3- oder FLAC-Ausgabe mit eingebetteten Metadaten und Cover, soweit die Quelle sie bereitstellt
 - direkter Download von Audio-URLs ohne wiederholte Bestätigungsdialoge
@@ -37,14 +37,15 @@ Audiobibliothek.
 ## Kein API-Schlüssel erforderlich
 
 Die Anwendung fragt keine API-Schlüssel, OAuth-Tokens oder Zugangsdaten ab. `yt-dlp` verarbeitet
-öffentlich erreichbare Links lokal und bleibt dabei auf der eingegebenen Quelle. Für Spotify liest
-`spotDL` ausschließlich die Metadaten und Playlist-Struktur. Spotify-Links werden nicht über YouTube,
-SoundCloud oder andere Ersatzquellen in Audio umgewandelt.
+öffentlich erreichbare Links lokal. Für Spotify übernimmt `spotDL` Metadaten und Playlist-Struktur
+und sucht den passenden Audiotreffer über YouTube Music, YouTube, SoundCloud oder Bandcamp.
 
 Mehrere einzelne Links können gemeinsam importiert und anschließend nacheinander als FLAC exportiert
 werden. Öffentliche Spotify-Playlists und -Alben werden als lokale Playlists mit einzelnen Spotify-
-Trackreferenzen importiert. Da ein öffentlicher Spotify-Link keine herunterladbare Audiodatei anbietet,
-bleiben diese Einträge Referenzen, bis eine rechtmäßig vorhandene lokale Audiodatei importiert wird.
+Trackreferenzen importiert. Da ein öffentlicher Spotify-Link keine direkte Audiodatei anbietet, wird
+beim Download eine passende externe Audioquelle gesucht und anschließend mit Spotify-Metadaten versehen.
+Eine FLAC-Ausgabe ist dabei eine verlustfreie Neukodierung der gefundenen Quelle und keine Steigerung
+deren ursprünglicher Audioqualität.
 Geschützte, private, nicht unterstützte oder DRM-gesicherte Inhalte schlagen fehl und werden in der
 Zusammenfassung aufgeführt; die Warteschlange läuft mit den übrigen Links weiter.
 
@@ -86,7 +87,7 @@ gestartet werden. Nach der ersten erfolgreichen Ausführung liegt die Seite norm
 `https://DEIN-NAME.github.io/DEIN-REPOSITORY/`.
 
 Vor einer neuen veröffentlichten Version muss die Versionsnummer ganz oben in `CMakeLists.txt`
-erhöht werden, zum Beispiel von `0.11.0` auf `0.11.1`. Ein Push ohne höhere Versionsnummer ersetzt
+erhöht werden, zum Beispiel von `0.11.1` auf `0.11.2`. Ein Push ohne höhere Versionsnummer ersetzt
 zwar den Pages-Build, löst in bereits installierten Apps aber absichtlich keine Update-Meldung aus.
 Der Workflow behält nur die jeweils aktuellen Pakete auf Pages, damit alte große Installer und DMGs
 nicht unnötig Speicherplatz verbrauchen.
