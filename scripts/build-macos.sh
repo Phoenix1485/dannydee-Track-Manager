@@ -59,7 +59,7 @@ if [[ ! -d "$APP_PATH" ]]; then
     exit 1
 fi
 
-"$QT_ROOT/bin/macdeployqt" "$APP_PATH" -always-overwrite -no-codesign
+"$QT_ROOT/bin/macdeployqt" "$APP_PATH" -always-overwrite
 
 RESOURCES_DIR="$APP_PATH/Contents/Resources"
 TOOLS_DIR="$RESOURCES_DIR/tools"
