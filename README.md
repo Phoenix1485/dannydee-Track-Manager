@@ -9,16 +9,23 @@ Audiobibliothek.
 - Suche sowie Genre- und BPM-Filter
 - Import vorhandener FLAC/WAV/AIFF/MP3/M4A/OGG-Dateien
 - Massenimport beliebig vieler Links aus einem einzigen Textfeld, inklusive Duplikatfilter
+- automatische Erkennung öffentlicher Spotify-, SoundCloud- und anderer unterstützter Playlists;
+  Titel, Reihenfolge und einzelne Original-Tracklinks werden als lokale Playlist übernommen
 - Link-Erkennung für Spotify, TikTok, YouTube, SoundCloud, Bandcamp, SoundBeaver und viele weitere Seiten
 - API-schlüsselfreie Verarbeitung öffentlich zugänglicher Medien-Links über `yt-dlp`
-- Spotify-Metadaten und Audio-Matching über `spotDL`
-- automatischer Wiederholungsversuch mit dem separat gebündelten aktuellen `yt-dlp`, falls der
-  interne spotDL-Downloader einen gefundenen YouTube-/SoundCloud-Treffer nicht laden kann
+- Spotify-Metadaten und Playlist-Auflösung über `spotDL`, ohne YouTube- oder andere Audio-Ersatzquellen
+- strikter Quellenmodus: SoundCloud-, TikTok-, Bandcamp- und andere Links werden nur über die
+  jeweils eingegebene Adresse verarbeitet; Spotify bleibt eine Metadaten-/Playlist-Referenz
 - Warteschlange zum Export aller gespeicherten Internet-Links als FLAC; Fehler stoppen die restliche Liste nicht
 - MP3- oder FLAC-Ausgabe mit eingebetteten Metadaten und Cover, soweit die Quelle sie bereitstellt
 - direkter Download von Audio-URLs ohne wiederholte Bestätigungsdialoge
 - FLAC- und 24-Bit-WAV-Export lokaler Dateien über FFmpeg
 - Playlist-/Set-Grundfunktionen und Wiedergabe lokaler Tracks
+- Mehrfachauswahl sowie Kopieren oder Verschieben von Tracks zwischen lokalen Playlists
+- dauerhaft sichtbare Playlist-Navigation mit aktiver Hervorhebung, Trackanzahl und schnellem Wechsel
+- zwei unabhängige Performance-Decks für lokale Tracks mit Play/Pause, Positionsanzeige und Beatgrid
+- automatische BPM- und Beatgrid-Analyse beim Laden eines noch nicht analysierten Tracks in ein Deck
+- Sync pro Deck: Tempo-Matching, Beatphasen-Ausrichtung und laufende Driftkorrektur zum anderen Deck
 - automatische Übernahme vorhandener Audio-Tags über FFprobe
 - sicheres Entfernen von Bibliothekseinträgen ohne Löschen der Audiodatei
 - modernes Desktop-Dashboard mit kompakten Statistiken, nativen Menüs und Tastenkürzeln
@@ -30,12 +37,14 @@ Audiobibliothek.
 ## Kein API-Schlüssel erforderlich
 
 Die Anwendung fragt keine API-Schlüssel, OAuth-Tokens oder Zugangsdaten ab. `yt-dlp` verarbeitet
-öffentlich erreichbare Links lokal. Für Spotify liest `spotDL` die Metadaten des Links und sucht einen
-passenden Audiotreffer bei konfigurierten Anbietern wie YouTube Music, YouTube oder SoundCloud.
-Die erzeugte Datei stammt daher nicht direkt aus dem Spotify-Stream.
+öffentlich erreichbare Links lokal und bleibt dabei auf der eingegebenen Quelle. Für Spotify liest
+`spotDL` ausschließlich die Metadaten und Playlist-Struktur. Spotify-Links werden nicht über YouTube,
+SoundCloud oder andere Ersatzquellen in Audio umgewandelt.
 
 Mehrere einzelne Links können gemeinsam importiert und anschließend nacheinander als FLAC exportiert
-werden. Spotify-Playlisten oder -Alben können durch spotDL mehrere Dateien für einen Link erzeugen.
+werden. Öffentliche Spotify-Playlists und -Alben werden als lokale Playlists mit einzelnen Spotify-
+Trackreferenzen importiert. Da ein öffentlicher Spotify-Link keine herunterladbare Audiodatei anbietet,
+bleiben diese Einträge Referenzen, bis eine rechtmäßig vorhandene lokale Audiodatei importiert wird.
 Geschützte, private, nicht unterstützte oder DRM-gesicherte Inhalte schlagen fehl und werden in der
 Zusammenfassung aufgeführt; die Warteschlange läuft mit den übrigen Links weiter.
 
@@ -76,7 +85,7 @@ gestartet werden. Nach der ersten erfolgreichen Ausführung liegt die Seite norm
 `https://DEIN-NAME.github.io/DEIN-REPOSITORY/`.
 
 Vor einer neuen veröffentlichten Version muss die Versionsnummer ganz oben in `CMakeLists.txt`
-erhöht werden, zum Beispiel von `0.6.0` auf `0.6.1`. Ein Push ohne höhere Versionsnummer ersetzt
+erhöht werden, zum Beispiel von `0.9.0` auf `0.9.1`. Ein Push ohne höhere Versionsnummer ersetzt
 zwar den Pages-Build, löst in bereits installierten Apps aber absichtlich keine Update-Meldung aus.
 Der Workflow behält nur die jeweils aktuelle Setup-Datei auf Pages, damit alte große Installer
 nicht unnötig Speicherplatz verbrauchen.

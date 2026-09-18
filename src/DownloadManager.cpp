@@ -13,7 +13,6 @@
 #include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QSaveFile>
-#include <QSet>
 #include <QStandardPaths>
 
 namespace {
@@ -38,8 +37,7 @@ DownloadManager::DownloadManager(QObject *parent)
     connect(&m_mediaProcess, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
         if (error != QProcess::FailedToStart) return;
         m_mediaStartFailed = true;
-        const QString tool = m_mediaUsesSpotDl ? "spotDL" : "yt-dlp";
-        emit failed(tool + " konnte nicht gestartet werden: " + m_mediaProcess.errorString(),
+        emit failed("yt-dlp konnte nicht gestartet werden: " + m_mediaProcess.errorString(),
                     m_mediaSourceUrl.toString());
     });
     connect(&m_mediaProcess, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
@@ -54,40 +52,17 @@ DownloadManager::DownloadManager(QObject *parent)
             return;
         }
         QStringList outputPaths;
-        if (m_mediaUsesSpotDl) {
-            const QFileInfoList files = QDir(m_mediaTargetDirectory).entryInfoList(
-                {"*." + m_mediaFormat}, QDir::Files, QDir::Time);
-            for (const QFileInfo &file : files) {
-                const QString path = file.absoluteFilePath();
-                const qint64 previous = m_mediaFilesBefore.value(path, -1);
-                if (previous < 0 || file.lastModified().toMSecsSinceEpoch() != previous)
-                    outputPaths << path;
-            }
-        } else {
-            for (const QString &path : m_mediaOutputPaths) {
-                if (QFileInfo::exists(path)) outputPaths << path;
-            }
+        for (const QString &path : m_mediaOutputPaths) {
+            if (QFileInfo::exists(path)) outputPaths << path;
         }
-        outputPaths << m_mediaPartialPaths;
         outputPaths.removeDuplicates();
         const bool ok = exitStatus == QProcess::NormalExit && exitCode == 0 && !outputPaths.isEmpty();
         if (ok) {
             emit mediaProgress(100, "Download und Konvertierung abgeschlossen.");
             emit mediaDownloaded(outputPaths);
         } else {
-            if (m_mediaUsesSpotDl && !m_spotifyFallbackActive) {
-                const QStringList fallbackUrls = spotDlFallbackUrls();
-                if (!fallbackUrls.isEmpty()) {
-                    m_mediaPartialPaths = outputPaths;
-                    m_spotifyFallbackActive = true;
-                    emit mediaProgress(0, "spotDL-Treffer wird mit dem aktuellen yt-dlp erneut versucht …");
-                    startYtDlpDownload(fallbackUrls, fallbackUrls.size() > 1);
-                    return;
-                }
-            }
             QString details = m_mediaLog.trimmed().right(2500);
-            const QString tool = m_mediaUsesSpotDl ? "spotDL" : "yt-dlp";
-            if (details.isEmpty()) details = QString("%1 wurde mit Code %2 beendet.").arg(tool).arg(exitCode);
+            if (details.isEmpty()) details = QString("yt-dlp wurde mit Code %1 beendet.").arg(exitCode);
             emit failed("Medien-Download fehlgeschlagen:\n" + details, m_mediaSourceUrl.toString());
         }
     });
@@ -108,28 +83,12 @@ QString DownloadManager::findTool(const QString &baseName)
     return ToolLocator::find(baseName);
 }
 
-QUrl DownloadManager::canonicalSpotifyUrl(const QUrl &url)
-{
-    if (!url.host().contains("spotify.com", Qt::CaseInsensitive)) return url;
-    const QStringList segments = url.path().split('/', Qt::SkipEmptyParts);
-    static const QSet<QString> entityTypes{
-        "track", "album", "playlist", "artist", "episode", "show"
-    };
-    for (int index = 0; index + 1 < segments.size(); ++index) {
-        const QString type = segments.at(index).toLower();
-        if (!entityTypes.contains(type)) continue;
-        QUrl canonical("https://open.spotify.com");
-        canonical.setPath("/" + type + "/" + segments.at(index + 1));
-        return canonical;
-    }
-    return url;
-}
-
 bool DownloadManager::mediaDownloaderAvailable(const QUrl &url) const
 {
     const bool spotify = url.host().contains("spotify.com", Qt::CaseInsensitive)
                          || url.host().compare("spotify.link", Qt::CaseInsensitive) == 0;
-    const QString downloader = spotify ? findTool("spotdl") : findTool("yt-dlp");
+    if (spotify) return true;
+    const QString downloader = findTool("yt-dlp");
     return !downloader.isEmpty() && !findTool("ffmpeg").isEmpty();
 }
 
@@ -151,14 +110,20 @@ void DownloadManager::downloadMedia(const QUrl &url, const QString &targetDirect
     }
     const bool spotify = url.host().contains("spotify.com", Qt::CaseInsensitive)
                          || url.host().compare("spotify.link", Qt::CaseInsensitive) == 0;
-    const QString downloader = findTool(spotify ? "spotdl" : "yt-dlp");
+    if (spotify) {
+        emit failed("Spotify-Links werden im strikten Quellenmodus nur als Metadaten und Playlist-Referenzen "
+                    "gespeichert. Spotify stellt über den öffentlichen Link keine herunterladbare Audiodatei "
+                    "bereit; deshalb wird keine YouTube- oder andere Ersatzquelle verwendet.",
+                    url.toString());
+        return;
+    }
+    const QString downloader = findTool("yt-dlp");
     const QString ffmpeg = findTool("ffmpeg");
     if (downloader.isEmpty() || ffmpeg.isEmpty()) {
-        const QString missingTool = spotify ? "spotDL" : "yt-dlp";
+        const QString missingTool = "yt-dlp";
         emit failed(QString("Für diesen Link werden %1 und FFmpeg benötigt. Ein API-Schlüssel ist nicht erforderlich.")
                         .arg(missingTool),
-                    spotify ? "https://github.com/spotDL/spotify-downloader/releases/latest"
-                            : "https://github.com/yt-dlp/yt-dlp/releases/latest");
+                    "https://github.com/yt-dlp/yt-dlp/releases/latest");
         return;
     }
     const QString normalizedFormat = audioFormat.toLower();
@@ -175,47 +140,11 @@ void DownloadManager::downloadMedia(const QUrl &url, const QString &targetDirect
     m_mediaOutputBuffer.clear();
     m_mediaLog.clear();
     m_mediaOutputPaths.clear();
-    m_mediaPartialPaths.clear();
-    m_mediaFilesBefore.clear();
     m_mediaTargetDirectory = directory.absolutePath();
     m_mediaFormat = normalizedFormat;
     m_mediaSourceUrl = url;
-    m_mediaUsesSpotDl = spotify;
-    m_spotifyFallbackActive = false;
     m_mediaStartFailed = false;
-
-    QStringList args;
-    if (spotify) {
-        const QFileInfoList existingFiles = directory.entryInfoList(
-            {"*." + normalizedFormat}, QDir::Files);
-        for (const QFileInfo &file : existingFiles)
-            m_mediaFilesBefore.insert(file.absoluteFilePath(), file.lastModified().toMSecsSinceEpoch());
-        args << "download" << canonicalSpotifyUrl(url).toString(QUrl::FullyEncoded)
-             << "--format" << normalizedFormat
-             << "--output" << directory.filePath("{artists} - {title} [{track-id}].{output-ext}")
-             << "--ffmpeg" << ffmpeg
-             << "--threads" << "1"
-             << "--overwrite" << "force"
-             << "--headless"
-             << "--simple-tui"
-             << "--log-level" << "INFO"
-             << "--print-errors"
-             << "--audio" << "youtube-music" << "youtube" << "soundcloud" << "bandcamp";
-    } else {
-        startYtDlpDownload({url.toString(QUrl::FullyEncoded)}, false);
-        return;
-    }
-
-    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
-    QStringList toolDirectories{QFileInfo(downloader).absolutePath(), QFileInfo(ffmpeg).absolutePath()};
-    toolDirectories.removeDuplicates();
-    environment.insert("PATH", toolDirectories.join(QDir::listSeparator())
-                                   + QDir::listSeparator() + environment.value("PATH"));
-    environment.insert("PYTHONIOENCODING", "utf-8");
-    m_mediaProcess.setProcessEnvironment(environment);
-    m_mediaProcess.setWorkingDirectory(directory.absolutePath());
-    emit mediaProgress(0, "Link wird analysiert …");
-    m_mediaProcess.start(downloader, args);
+    startYtDlpDownload({url.toString(QUrl::FullyEncoded)}, false);
 }
 
 void DownloadManager::startYtDlpDownload(const QStringList &urls, bool continueOnError)
@@ -228,7 +157,6 @@ void DownloadManager::startYtDlpDownload(const QStringList &urls, bool continueO
         return;
     }
 
-    m_mediaUsesSpotDl = false;
     m_mediaOutputBuffer.clear();
     m_mediaLog.clear();
     m_mediaOutputPaths.clear();
@@ -259,28 +187,8 @@ void DownloadManager::startYtDlpDownload(const QStringList &urls, bool continueO
     environment.insert("PYTHONIOENCODING", "utf-8");
     m_mediaProcess.setProcessEnvironment(environment);
     m_mediaProcess.setWorkingDirectory(m_mediaTargetDirectory);
-    if (!m_spotifyFallbackActive) emit mediaProgress(0, "Link wird analysiert …");
+    emit mediaProgress(0, "Link wird analysiert …");
     m_mediaProcess.start(downloader, args);
-}
-
-QStringList DownloadManager::spotDlFallbackUrls() const
-{
-    static const QRegularExpression providerUrl(R"(https?://[^\s]+)",
-                                                 QRegularExpression::CaseInsensitiveOption);
-    QSet<QString> unique;
-    auto matches = providerUrl.globalMatch(m_mediaLog);
-    while (matches.hasNext()) {
-        QString value = matches.next().captured(0);
-        while (value.endsWith('.') || value.endsWith(',') || value.endsWith(';') || value.endsWith(')'))
-            value.chop(1);
-        const QUrl candidate(value);
-        const QString host = candidate.host().toLower();
-        const bool supported = host == "youtu.be" || host.endsWith("youtube.com")
-                               || host.endsWith("soundcloud.com") || host.endsWith("bandcamp.com");
-        if (candidate.isValid() && supported)
-            unique.insert(candidate.toString(QUrl::FullyEncoded));
-    }
-    return unique.values();
 }
 
 void DownloadManager::consumeMediaOutput()
@@ -314,7 +222,7 @@ void DownloadManager::handleMediaLine(const QString &rawLine)
     if (!line.trimmed().isEmpty()) {
         m_mediaLog += line.trimmed() + '\n';
         if (m_mediaLog.size() > 12000) m_mediaLog = m_mediaLog.right(12000);
-        if (m_mediaUsesSpotDl || line.startsWith("[ExtractAudio]") || line.startsWith("[Metadata]")
+        if (line.startsWith("[ExtractAudio]") || line.startsWith("[Metadata]")
             || line.startsWith("[EmbedThumbnail]") || line.startsWith("[Merger]")) {
             emit mediaProgress(-1, line.trimmed());
         }

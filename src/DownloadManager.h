@@ -5,7 +5,6 @@
 #include <QSaveFile>
 #include <QStringList>
 #include <QUrl>
-#include <QHash>
 
 #include <memory>
 
@@ -45,11 +44,9 @@ private:
     void startFileRequest(const QUrl &url, const QString &targetDirectory,
                           const OfficialTrackInfo &track);
     void startYtDlpDownload(const QStringList &urls, bool continueOnError);
-    QStringList spotDlFallbackUrls() const;
     void consumeMediaOutput();
     void handleMediaLine(const QString &line);
     static QString findTool(const QString &baseName);
-    static QUrl canonicalSpotifyUrl(const QUrl &url);
     bool ensureOutputFile(QNetworkReply *reply);
     QString chooseOutputName(QNetworkReply *reply) const;
     static QString safeFileName(QString value);
@@ -64,13 +61,9 @@ private:
     QByteArray m_mediaOutputBuffer;
     QString m_mediaLog;
     QStringList m_mediaOutputPaths;
-    QStringList m_mediaPartialPaths;
     QString m_mediaTargetDirectory;
     QString m_mediaFormat;
     QUrl m_mediaSourceUrl;
-    QHash<QString, qint64> m_mediaFilesBefore;
-    bool m_mediaUsesSpotDl = false;
-    bool m_spotifyFallbackActive = false;
     bool m_mediaStartFailed = false;
 };
 

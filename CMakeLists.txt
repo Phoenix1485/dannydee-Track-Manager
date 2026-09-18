@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(DannyDeeTrackManager VERSION 0.6.0 LANGUAGES CXX)
+project(DannyDeeTrackManager VERSION 0.9.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -22,6 +22,10 @@ qt_add_executable(DannyDeeTrackManager WIN32 MACOSX_BUNDLE
     src/AudioProbe.cpp src/AudioProbe.h
     src/ToolLocator.cpp src/ToolLocator.h
     src/UpdateManager.cpp src/UpdateManager.h
+    src/PlaylistImporter.cpp src/PlaylistImporter.h
+    src/BeatAnalyzer.cpp src/BeatAnalyzer.h
+    src/BeatGridWidget.cpp src/BeatGridWidget.h
+    src/BeatSyncMath.cpp src/BeatSyncMath.h
     resources/resources.qrc
 )
 
@@ -48,12 +52,6 @@ install(TARGETS DannyDeeTrackManager
 
 include(CTest)
 if(BUILD_TESTING)
-    add_executable(DannyDeeFakeSpotDl tests/FakeSpotDl.cpp)
-    set_target_properties(DannyDeeFakeSpotDl PROPERTIES
-        OUTPUT_NAME "spotdl"
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/test-tools"
-    )
-
     qt_add_executable(DannyDeeDownloadFallbackTest
         tests/DownloadManagerFallbackTest.cpp
         src/DownloadManager.cpp src/DownloadManager.h
@@ -64,11 +62,7 @@ if(BUILD_TESTING)
         src "${CMAKE_CURRENT_BINARY_DIR}/generated"
     )
     target_link_libraries(DannyDeeDownloadFallbackTest PRIVATE Qt6::Core Qt6::Network)
-    add_test(NAME spotify_external_ytdlp_fallback COMMAND DannyDeeDownloadFallbackTest)
-    set_tests_properties(spotify_external_ytdlp_fallback PROPERTIES
-        ENVIRONMENT "DANNYDEE_TOOLS_DIR=${CMAKE_BINARY_DIR}/test-tools"
-        TIMEOUT 120
-    )
+    add_test(NAME spotify_strict_source_mode COMMAND DannyDeeDownloadFallbackTest)
 
     qt_add_executable(DannyDeeUpdateVersionTest
         tests/UpdateManagerVersionTest.cpp
@@ -80,4 +74,59 @@ if(BUILD_TESTING)
     )
     target_link_libraries(DannyDeeUpdateVersionTest PRIVATE Qt6::Core Qt6::Network)
     add_test(NAME update_version_comparison COMMAND DannyDeeUpdateVersionTest)
+
+    qt_add_executable(DannyDeePlaylistTest
+        tests/PlaylistFeatureTest.cpp
+        src/Database.cpp src/Database.h
+        src/PlaylistImporter.cpp src/PlaylistImporter.h
+        src/ToolLocator.cpp src/ToolLocator.h
+    )
+    set_target_properties(DannyDeePlaylistTest PROPERTIES WIN32_EXECUTABLE FALSE)
+    target_include_directories(DannyDeePlaylistTest PRIVATE src)
+    target_link_libraries(DannyDeePlaylistTest PRIVATE Qt6::Core Qt6::Sql)
+    add_test(NAME playlist_import_and_membership COMMAND DannyDeePlaylistTest)
+
+    qt_add_executable(DannyDeeBeatAnalyzerTest
+        tests/BeatAnalyzerTest.cpp
+        src/BeatAnalyzer.cpp src/BeatAnalyzer.h
+        src/ToolLocator.cpp src/ToolLocator.h
+    )
+    set_target_properties(DannyDeeBeatAnalyzerTest PROPERTIES WIN32_EXECUTABLE FALSE)
+    target_include_directories(DannyDeeBeatAnalyzerTest PRIVATE src)
+    target_link_libraries(DannyDeeBeatAnalyzerTest PRIVATE Qt6::Core)
+    add_test(NAME bpm_and_beatgrid_analysis COMMAND DannyDeeBeatAnalyzerTest)
+
+    qt_add_executable(DannyDeeBeatSyncMathTest
+        tests/BeatSyncMathTest.cpp
+        src/BeatSyncMath.cpp src/BeatSyncMath.h
+    )
+    set_target_properties(DannyDeeBeatSyncMathTest PROPERTIES WIN32_EXECUTABLE FALSE)
+    target_include_directories(DannyDeeBeatSyncMathTest PRIVATE src)
+    target_link_libraries(DannyDeeBeatSyncMathTest PRIVATE Qt6::Core)
+    add_test(NAME beat_sync_math COMMAND DannyDeeBeatSyncMathTest)
+
+    qt_add_executable(DannyDeeMainWindowUiSmokeTest
+        tests/MainWindowUiSmokeTest.cpp
+        src/MainWindow.cpp src/MainWindow.h
+        src/Database.cpp src/Database.h
+        src/LinkResolver.cpp src/LinkResolver.h
+        src/AudioConverter.cpp src/AudioConverter.h
+        src/DownloadManager.cpp src/DownloadManager.h
+        src/AudioProbe.cpp src/AudioProbe.h
+        src/ToolLocator.cpp src/ToolLocator.h
+        src/UpdateManager.cpp src/UpdateManager.h
+        src/PlaylistImporter.cpp src/PlaylistImporter.h
+        src/BeatAnalyzer.cpp src/BeatAnalyzer.h
+        src/BeatGridWidget.cpp src/BeatGridWidget.h
+        src/BeatSyncMath.cpp src/BeatSyncMath.h
+    )
+    set_target_properties(DannyDeeMainWindowUiSmokeTest PROPERTIES WIN32_EXECUTABLE FALSE)
+    target_include_directories(DannyDeeMainWindowUiSmokeTest PRIVATE
+        src "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    )
+    target_link_libraries(DannyDeeMainWindowUiSmokeTest PRIVATE
+        Qt6::Widgets Qt6::Sql Qt6::Network Qt6::Multimedia
+    )
+    add_test(NAME main_window_ui_smoke COMMAND DannyDeeMainWindowUiSmokeTest)
+    set_tests_properties(main_window_ui_smoke PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()

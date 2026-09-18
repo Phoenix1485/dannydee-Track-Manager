@@ -33,9 +33,12 @@ bool Database::migrate()
         "id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, artist TEXT NOT NULL, "
         "genre TEXT, bpm REAL DEFAULT 0, musical_key TEXT, energy INTEGER DEFAULT 5 "
         "CHECK(energy BETWEEN 1 AND 10), label TEXT, release_date TEXT, source_url TEXT, "
-        "local_path TEXT, licensed INTEGER NOT NULL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP)",
+        "local_path TEXT, licensed INTEGER NOT NULL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, "
+        "beatgrid_offset_ms REAL DEFAULT 0, beatgrid_confidence REAL DEFAULT 0, "
+        "beatgrid_analyzed INTEGER NOT NULL DEFAULT 0)",
         "CREATE TABLE IF NOT EXISTS playlists (id INTEGER PRIMARY KEY AUTOINCREMENT, "
-        "name TEXT NOT NULL UNIQUE, created_at TEXT DEFAULT CURRENT_TIMESTAMP)",
+        "name TEXT NOT NULL UNIQUE, source_url TEXT, provider TEXT, "
+        "created_at TEXT DEFAULT CURRENT_TIMESTAMP)",
         "CREATE TABLE IF NOT EXISTS playlist_tracks (playlist_id INTEGER NOT NULL, "
         "track_id INTEGER NOT NULL, position INTEGER NOT NULL DEFAULT 0, "
         "PRIMARY KEY(playlist_id, track_id), "
@@ -50,6 +53,33 @@ bool Database::migrate()
             return false;
         }
     }
+
+    auto ensureColumn = [this](const QString &table, const QString &column,
+                               const QString &definition) {
+        QSqlQuery columns(m_db);
+        if (!columns.exec("PRAGMA table_info(" + table + ")")) return false;
+        while (columns.next()) {
+            if (columns.value(1).toString().compare(column, Qt::CaseInsensitive) == 0) return true;
+        }
+        QSqlQuery alter(m_db);
+        if (!alter.exec(QString("ALTER TABLE %1 ADD COLUMN %2 %3")
+                            .arg(table, column, definition))) {
+            m_lastError = alter.lastError().text();
+            return false;
+        }
+        return true;
+    };
+    if (!ensureColumn("tracks", "beatgrid_offset_ms", "REAL DEFAULT 0") ||
+        !ensureColumn("tracks", "beatgrid_confidence", "REAL DEFAULT 0") ||
+        !ensureColumn("tracks", "beatgrid_analyzed", "INTEGER NOT NULL DEFAULT 0") ||
+        !ensureColumn("playlists", "source_url", "TEXT") ||
+        !ensureColumn("playlists", "provider", "TEXT")) return false;
+
+    if (!q.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_playlists_source_url "
+                "ON playlists(source_url) WHERE source_url IS NOT NULL AND source_url <> ''")) {
+        m_lastError = q.lastError().text();
+        return false;
+    }
     return true;
 }
 
@@ -58,23 +88,76 @@ bool Database::addTrack(const QString &title, const QString &artist, const QStri
                         const QString &releaseDate, const QString &sourceUrl,
                         const QString &localPath, bool licensed)
 {
+    return addTrackReturningId(title, artist, genre, bpm, key, energy, label,
+                               releaseDate, sourceUrl, localPath, licensed) >= 0;
+}
+
+int Database::addTrackReturningId(const QString &title, const QString &artist, const QString &genre,
+                                  double bpm, const QString &key, int energy, const QString &label,
+                                  const QString &releaseDate, const QString &sourceUrl,
+                                  const QString &localPath, bool licensed)
+{
     QSqlQuery q(m_db);
     q.prepare("INSERT INTO tracks(title,artist,genre,bpm,musical_key,energy,label,release_date,"
               "source_url,local_path,licensed) VALUES(?,?,?,?,?,?,?,?,?,?,?)");
     const QVariantList values{title, artist, genre, bpm, key, energy, label, releaseDate,
                               sourceUrl, localPath, licensed ? 1 : 0};
     for (const auto &value : values) q.addBindValue(value);
-    if (!q.exec()) m_lastError = q.lastError().text();
-    return q.isActive();
+    if (!q.exec()) {
+        m_lastError = q.lastError().text();
+        return -1;
+    }
+    return q.lastInsertId().toInt();
+}
+
+int Database::findTrackBySourceUrl(const QString &sourceUrl) const
+{
+    if (sourceUrl.trimmed().isEmpty()) return -1;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT id FROM tracks WHERE source_url=? ORDER BY id LIMIT 1");
+    q.addBindValue(sourceUrl);
+    return q.exec() && q.next() ? q.value(0).toInt() : -1;
 }
 
 bool Database::addPlaylist(const QString &name)
 {
-    QSqlQuery q(m_db);
-    q.prepare("INSERT INTO playlists(name) VALUES(?)");
-    q.addBindValue(name);
-    if (!q.exec()) m_lastError = q.lastError().text();
-    return q.isActive();
+    return ensurePlaylist(name) >= 0;
+}
+
+int Database::ensurePlaylist(const QString &name, const QString &sourceUrl,
+                             const QString &provider)
+{
+    if (!sourceUrl.trimmed().isEmpty()) {
+        QSqlQuery existing(m_db);
+        existing.prepare("SELECT id FROM playlists WHERE source_url=? LIMIT 1");
+        existing.addBindValue(sourceUrl);
+        if (existing.exec() && existing.next()) return existing.value(0).toInt();
+    }
+
+    QString candidate = name.trimmed();
+    if (candidate.isEmpty()) candidate = provider.isEmpty() ? "Importierte Playlist" : provider + " Playlist";
+    const QString baseName = candidate;
+    int suffix = 2;
+    while (true) {
+        QSqlQuery existing(m_db);
+        existing.prepare("SELECT id,source_url FROM playlists WHERE name=? LIMIT 1");
+        existing.addBindValue(candidate);
+        if (!existing.exec() || !existing.next()) break;
+        if (sourceUrl.isEmpty() && existing.value(1).toString().isEmpty())
+            return existing.value(0).toInt();
+        candidate = QString("%1 (%2)").arg(baseName).arg(suffix++);
+    }
+
+    QSqlQuery insert(m_db);
+    insert.prepare("INSERT INTO playlists(name,source_url,provider) VALUES(?,?,?)");
+    insert.addBindValue(candidate);
+    insert.addBindValue(sourceUrl);
+    insert.addBindValue(provider);
+    if (!insert.exec()) {
+        m_lastError = insert.lastError().text();
+        return -1;
+    }
+    return insert.lastInsertId().toInt();
 }
 
 bool Database::addToPlaylist(int playlistId, int trackId)
@@ -87,4 +170,54 @@ bool Database::addToPlaylist(int playlistId, int trackId)
     q.addBindValue(playlistId);
     if (!q.exec()) m_lastError = q.lastError().text();
     return q.isActive();
+}
+
+bool Database::removeFromPlaylist(int playlistId, int trackId)
+{
+    QSqlQuery q(m_db);
+    q.prepare("DELETE FROM playlist_tracks WHERE playlist_id=? AND track_id=?");
+    q.addBindValue(playlistId);
+    q.addBindValue(trackId);
+    if (!q.exec()) m_lastError = q.lastError().text();
+    return q.isActive();
+}
+
+bool Database::moveTracksBetweenPlaylists(int sourcePlaylistId, int targetPlaylistId,
+                                          const QList<int> &trackIds)
+{
+    if (sourcePlaylistId < 0 || targetPlaylistId < 0 || sourcePlaylistId == targetPlaylistId)
+        return false;
+    if (!m_db.transaction()) {
+        m_lastError = m_db.lastError().text();
+        return false;
+    }
+    for (const int trackId : trackIds) {
+        if (!addToPlaylist(targetPlaylistId, trackId) ||
+            !removeFromPlaylist(sourcePlaylistId, trackId)) {
+            m_db.rollback();
+            return false;
+        }
+    }
+    if (!m_db.commit()) {
+        m_lastError = m_db.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool Database::updateBeatAnalysis(int trackId, double bpm, double firstBeatMs,
+                                  double confidence)
+{
+    QSqlQuery query(m_db);
+    query.prepare("UPDATE tracks SET bpm=?,beatgrid_offset_ms=?,beatgrid_confidence=?,"
+                  "beatgrid_analyzed=1 WHERE id=?");
+    query.addBindValue(bpm);
+    query.addBindValue(firstBeatMs);
+    query.addBindValue(confidence);
+    query.addBindValue(trackId);
+    if (!query.exec()) {
+        m_lastError = query.lastError().text();
+        return false;
+    }
+    return query.numRowsAffected() == 1;
 }
